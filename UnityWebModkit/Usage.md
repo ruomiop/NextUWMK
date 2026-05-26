@@ -36,6 +36,17 @@ plugin.onLoaded = () => {
 };
 ```
 
+`plugin.metadata` is available after metadata loading:
+
+```js
+plugin.metadata.version;              // normalized metadata version
+plugin.metadata.rawVersion;           // raw global-metadata.dat header version
+plugin.metadata.referencedAssemblies; // assemblies requested by plugins
+plugin.metadata.imageCount;           // original IL2CPP image count
+plugin.metadata.methodCount;          // original IL2CPP method count
+plugin.metadata.fieldCount;           // original IL2CPP field count
+```
+
 ## Method Hooks
 
 ### Prefix Hook
@@ -143,6 +154,8 @@ value.readFieldByName("Player", "health", "u8");
 value.writeFieldByName("Player", "health", "u8", 100);
 ```
 
+This field-name syntax is one of the NextUWMK 0.1 additions. It resolves offsets from runtime IL2CPP metadata, then reads or writes the field through wasm memory.
+
 Supported primitive field types include `i32`, `u32`, `u8`, and `f32`.
 
 ## ClassWrapper
@@ -157,6 +170,10 @@ class Player extends UWM.ClassWrapper {
 
   get health() {
     return this.readFieldByName("health", "u8").val();
+  }
+
+  set health(value) {
+    this.writeFieldByName("health", "u8", value);
   }
 }
 ```
@@ -195,6 +212,21 @@ plugin.listFields("Player");
 plugin.findFields("health");
 ```
 
+`listFields()` returns entries shaped like:
+
+```js
+{
+  typeName: "Player",
+  name: "health",
+  index: 1234,
+  offset: 0x28,
+  token: 0x04000000,
+  typeIndex: 42,
+}
+```
+
+`findFields(pattern)` searches both class names and field names.
+
 Override field offsets when runtime metadata is incomplete:
 
 ```js
@@ -212,6 +244,20 @@ console.log(plugin.metadata);
 ```
 
 The metadata object includes parsed IL2CPP version, image count, method count, field count, and referenced assemblies.
+
+Typical metadata logging:
+
+```js
+plugin.onLoaded = () => {
+  console.info("[plugin] metadata", {
+    version: plugin.metadata.version,
+    rawVersion: plugin.metadata.rawVersion,
+    assemblies: plugin.metadata.referencedAssemblies,
+    methods: plugin.metadata.methodCount,
+    fields: plugin.metadata.fieldCount,
+  });
+};
+```
 
 ## Logging
 

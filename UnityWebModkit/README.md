@@ -13,8 +13,30 @@ This repository contains the 0.1 release: TypeScript source and a prebuilt `dist
 - Supports import hooks for wasm import interception.
 - Supports small WebAssembly bytecode method patches and method NOP patches.
 - Provides `ValueWrapper` and `ClassWrapper` helpers for IL2CPP object fields.
+- Adds metadata-aware field syntax such as `readFieldByName()` and `writeFieldByName()`.
+- Adds runtime metadata inspection through `plugin.metadata`.
+- Adds field inspection helpers such as `plugin.listFields()` and `plugin.findFields()`.
+- Adds field offset override support through `plugin.registerFieldOffsets()`.
 - Provides managed heap helpers for `malloc`, scoped `alloc`, `free`, `memcpy`, and managed string creation.
 - Exposes field discovery and field offset overrides for games with missing or unusual field-offset data.
+
+## Added API Surface In 0.1
+
+The 0.1 release documents and exposes several APIs that are especially useful when working from runtime evidence:
+
+- `plugin.metadata`
+- `plugin.listFields(targetClass?)`
+- `plugin.findFields(pattern)`
+- `plugin.registerFieldOffsets(offsets)`
+- `ValueWrapper.readFieldByName(typeName, fieldName, dataType)`
+- `ValueWrapper.writeFieldByName(typeName, fieldName, dataType, value)`
+- `ClassWrapper.readFieldByName(fieldName, dataType)`
+- `ClassWrapper.writeFieldByName(fieldName, dataType, value)`
+- `ValueWrapper.getClassName()`
+- `plugin.alloc(size)` / `ManagedAllocation.dispose()`
+- `plugin.patchBytecode(target, bytecode)`
+- `plugin.nopMethod(target)`
+- `plugin.hookImport(target, callback)`
 
 ## Documentation
 

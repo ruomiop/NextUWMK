@@ -19,6 +19,7 @@ Compared with the original UnityWebModkit base, this version adds or updates:
   - `plugin.listFields()`
   - `plugin.findFields()`
 - Runtime field offset override support with `plugin.registerFieldOffsets()`.
+- Metadata inspection through `plugin.metadata`, including normalized metadata version, raw metadata version, referenced assemblies, image count, method count, and field count.
 - Safer managed allocation helper `plugin.alloc()` with explicit `dispose()` support.
 - More flexible method target syntax:
   - `Type.Method`
@@ -29,6 +30,11 @@ Compared with the original UnityWebModkit base, this version adds or updates:
   - `plugin.patchBytecode()`
   - `plugin.nopMethod()`
 - `ValueWrapper.getClassName()` helper for runtime object inspection.
+- Metadata-aware field access syntax:
+  - `ValueWrapper.readFieldByName(typeName, fieldName, dataType)`
+  - `ValueWrapper.writeFieldByName(typeName, fieldName, dataType, value)`
+  - `ClassWrapper.readFieldByName(fieldName, dataType)`
+  - `ClassWrapper.writeFieldByName(fieldName, dataType, value)`
 - Browser global compatibility for userscript contexts that expose `unsafeWindow`.
 - Prebuilt `dist` userscript bundle included in the repository.
 

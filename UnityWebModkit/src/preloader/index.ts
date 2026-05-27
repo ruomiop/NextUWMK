@@ -54,7 +54,9 @@ function loadWebData(): Promise<WebData> {
   });
 }
 
-export async function probeUnityWebDataFromCache(): Promise<WebData | undefined> {
+export async function probeUnityWebDataFromCache(): Promise<
+  WebData | undefined
+> {
   const page = getPageWindow();
   const cacheStorageWebData = await loadWebDataFromCacheStorage();
   if (cacheStorageWebData) {
@@ -63,7 +65,8 @@ export async function probeUnityWebDataFromCache(): Promise<WebData | undefined>
     return cacheStorageWebData;
   }
 
-  if (!("indexedDB" in page) || !("databases" in page.indexedDB)) return undefined;
+  if (!("indexedDB" in page) || !("databases" in page.indexedDB))
+    return undefined;
 
   const databases: IDBDatabaseInfo[] = await page.indexedDB.databases();
   const unityCache = databases.findIndex((d) => d.name === "UnityCache");
@@ -74,51 +77,72 @@ export async function probeUnityWebDataFromCache(): Promise<WebData | undefined>
     request.onerror = () => resolve(undefined);
     request.onsuccess = (event: any) => {
       const db = event.target.result;
-      if (!db.objectStoreNames.contains("RequestStore")) {
+      const objectStores = Array.from(db.objectStoreNames as any) as string[];
+      const storesToProbe = objectStores.includes("RequestStore")
+        ? ["RequestStore"]
+        : objectStores.filter((name) =>
+            /request|xhr|xmlhttprequest|data/i.test(name),
+          );
+
+      if (storesToProbe.length === 0) {
         db.close();
         resolve(undefined);
         return;
       }
 
-      let requestCacheEntries;
-      try {
-        requestCacheEntries = db
-          .transaction(["RequestStore"], "readonly")
-          .objectStore("RequestStore")
-          .getAll();
-      } catch {
-        db.close();
-        resolve(undefined);
-        return;
-      }
-      requestCacheEntries.onsuccess = async (event: any) => {
-        const entries = event.target.result;
-        for (const entry of entries) {
-          const data = toArrayBuffer(entry?.response?.parsedBody);
-          if (!data) continue;
-          const parsed = await tryParseWebData(data, "UnityCache indexedDB");
-          if (parsed) {
-            page.__UnityWebModkitWebData = parsed;
-            notifyWebDataCallbacks(parsed);
-            db.close();
-            resolve(parsed);
-            return;
-          }
+      let remainingStores = storesToProbe.length;
+      const finishStore = () => {
+        remainingStores--;
+        if (remainingStores <= 0) {
+          db.close();
+          resolve(undefined);
         }
-        db.close();
-        resolve(undefined);
       };
-      requestCacheEntries.onerror = () => {
-        db.close();
-        resolve(undefined);
-      };
+
+      for (const storeName of storesToProbe) {
+        let requestCacheEntries;
+        try {
+          requestCacheEntries = db
+            .transaction([storeName], "readonly")
+            .objectStore(storeName)
+            .getAll();
+        } catch {
+          finishStore();
+          return;
+        }
+        requestCacheEntries.onsuccess = async (event: any) => {
+          const entries = event.target.result;
+          for (const entry of entries) {
+            const buffers = await extractArrayBuffers(entry);
+            for (const data of buffers) {
+              const parsed = await tryParseWebData(
+                data,
+                `UnityCache indexedDB ${storeName}`,
+              );
+              if (parsed) {
+                page.__UnityWebModkitWebData = parsed;
+                notifyWebDataCallbacks(parsed);
+                db.close();
+                resolve(parsed);
+                return;
+              }
+            }
+          }
+          finishStore();
+        };
+        requestCacheEntries.onerror = () => {
+          finishStore();
+        };
+      }
     };
   });
 }
 
 async function fallbackInterceptFetch(): Promise<WebData> {
   const page = getPageWindow();
-  logger.debug("Nothing in indexedDB cache, resorting to hooking Fetch/XHR API");
+  logger.debug(
+    "Nothing in indexedDB cache, resorting to hooking Fetch/XHR API",
+  );
   return new Promise<WebData>((resolve) => {
     let resolved = false;
     const resolveOnce = async (
@@ -147,7 +171,10 @@ async function fallbackInterceptFetch(): Promise<WebData> {
               resolve(parsed);
             }
           } else {
-            await resolveOnce(await response.clone().arrayBuffer(), "fallback fetch");
+            await resolveOnce(
+              await response.clone().arrayBuffer(),
+              "fallback fetch",
+            );
           }
           if (resolved) page.fetch = originalFetch;
         } catch (err) {
@@ -225,7 +252,9 @@ function installUnityInstanceInterceptor() {
     const wrapped = function (this: any, ...args: any[]) {
       markUnityCandidateSeen();
       const result = fn.apply(this, args);
-      Promise.resolve(result).then(capture).catch(() => undefined);
+      Promise.resolve(result)
+        .then(capture)
+        .catch(() => undefined);
       return result;
     };
     wrapped.__unityWebModkitPatched = true;
@@ -370,7 +399,10 @@ async function clearUnityCache() {
     const keys = await page.caches.keys();
     await Promise.all(
       keys
-        .filter((key: string) => key === "UnityCache" || key.toLowerCase().includes("unity"))
+        .filter(
+          (key: string) =>
+            key === "UnityCache" || key.toLowerCase().includes("unity"),
+        )
         .map((key: string) => page.caches.delete(key)),
     );
   }
@@ -380,7 +412,10 @@ async function clearUnityCache() {
     await Promise.all(
       databases
         .map((db: IDBDatabaseInfo) => db.name)
-        .filter((name: string | undefined): name is string => !!name && name.includes("UnityCache"))
+        .filter(
+          (name: string | undefined): name is string =>
+            !!name && name.includes("UnityCache"),
+        )
         .map(
           (name: string) =>
             new Promise<void>((resolve) => {
@@ -422,7 +457,8 @@ async function loadWebDataFromCacheStorage(): Promise<WebData | undefined> {
   try {
     const keys = await page.caches.keys();
     for (const key of keys) {
-      if (key !== "UnityCache" && !key.toLowerCase().includes("unity")) continue;
+      if (key !== "UnityCache" && !key.toLowerCase().includes("unity"))
+        continue;
       const cache = await page.caches.open(key);
       const requests = await cache.keys();
       for (const request of requests) {
@@ -448,7 +484,10 @@ async function decompressUnityWebData(
   if (!isGzip(data)) return data;
   const DecompressionStreamCtor = (getPageWindow() as any).DecompressionStream;
   if (typeof DecompressionStreamCtor !== "function") {
-    logger.warn("Unable to decompress gzip Unity data from %s: DecompressionStream is unavailable", source);
+    logger.warn(
+      "Unable to decompress gzip Unity data from %s: DecompressionStream is unavailable",
+      source,
+    );
     return data;
   }
   try {
@@ -464,7 +503,11 @@ async function decompressUnityWebData(
     );
     return decompressed;
   } catch (err) {
-    logger.warn("Failed to decompress gzip Unity data from %s: %o", source, err);
+    logger.warn(
+      "Failed to decompress gzip Unity data from %s: %o",
+      source,
+      err,
+    );
     return data;
   }
 }
@@ -489,7 +532,10 @@ function toArrayBuffer(data: any): ArrayBuffer | undefined {
   if (!data) return undefined;
   if (data instanceof ArrayBuffer) return data;
   if (ArrayBuffer.isView(data)) {
-    return data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
+    return data.buffer.slice(
+      data.byteOffset,
+      data.byteOffset + data.byteLength,
+    );
   }
   if (data.buffer instanceof ArrayBuffer) {
     return data.buffer.slice(
@@ -498,6 +544,63 @@ function toArrayBuffer(data: any): ArrayBuffer | undefined {
     );
   }
   return undefined;
+}
+
+async function extractArrayBuffers(entry: any): Promise<ArrayBuffer[]> {
+  const buffers: ArrayBuffer[] = [];
+  const seen = new Set<any>();
+  const queue = [
+    entry,
+    entry?.xhr,
+    entry?.xhr?.response,
+    entry?.xhr?.responseText,
+    entry?.xhr?.responseBody,
+    entry?.response,
+    entry?.response?.parsedBody,
+    entry?.response?.body,
+    entry?.parsedBody,
+    entry?.body,
+    entry?.data,
+    entry?.value,
+  ];
+
+  while (queue.length > 0) {
+    const value = queue.shift();
+    if (!value || seen.has(value)) continue;
+    seen.add(value);
+
+    const buffer = toArrayBuffer(value);
+    if (buffer) {
+      buffers.push(buffer);
+      continue;
+    }
+
+    if (value instanceof Blob) {
+      buffers.push(await value.arrayBuffer());
+      continue;
+    }
+
+    if (typeof Response !== "undefined" && value instanceof Response) {
+      buffers.push(await value.clone().arrayBuffer());
+      continue;
+    }
+
+    if (typeof value === "object") {
+      for (const key of [
+        "response",
+        "parsedBody",
+        "body",
+        "data",
+        "value",
+        "buffer",
+        "result",
+      ]) {
+        if (value[key]) queue.push(value[key]);
+      }
+    }
+  }
+
+  return buffers;
 }
 
 function getPageWindow(): any {

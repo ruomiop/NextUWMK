@@ -71,6 +71,7 @@ export class Runtime {
   private internalWasmCode: any;
   private wasmCacheKey = "";
   private wasmImportFunctionCount = 0;
+  private stringNewEncoding: "utf8" | "utf16" = "utf8";
   private allocationRegistry?: {
     register(target: object, heldValue: number, unregisterToken?: object): void;
     unregister(unregisterToken: object): boolean;
@@ -239,12 +240,19 @@ export class Runtime {
         wasmCacheKey: this.wasmCacheKey,
         metadataHash: this.globalMetadata?.integrityHash,
         resolvedIl2CppFunctions: this.resolvedIl2CppFunctions,
+        stringNewEncoding: this.stringNewEncoding,
       });
     };
   }
 
-  private readIl2CppFunctionCache(): Promise<Record<string, number>> {
-    return new Promise<Record<string, number>>((resolve, reject) => {
+  private readIl2CppFunctionCache(): Promise<{
+    resolvedIl2CppFunctions: Record<string, number>;
+    stringNewEncoding?: "utf8" | "utf16";
+  }> {
+    return new Promise<{
+      resolvedIl2CppFunctions: Record<string, number>;
+      stringNewEncoding?: "utf8" | "utf16";
+    }>((resolve, reject) => {
       if (!this.wasmCacheKey) {
         reject();
         return;
@@ -279,7 +287,11 @@ export class Runtime {
               reject();
               return;
             }
-            resolve(cache.resolvedIl2CppFunctions);
+            resolve({
+              resolvedIl2CppFunctions: cache.resolvedIl2CppFunctions,
+              stringNewEncoding:
+                cache.stringNewEncoding === "utf16" ? "utf16" : "utf8",
+            });
           };
           cacheRequest.onerror = () => reject();
         };
@@ -398,7 +410,9 @@ export class Runtime {
     page.WebAssembly.instantiateStreaming =
       this.onWebAssemblyInstantiateStreaming.bind(this);
     this.instantiate = page.WebAssembly.instantiate;
-    page.WebAssembly.instantiate = this.onWebAssemblyInstantiate.bind(this) as any;
+    page.WebAssembly.instantiate = this.onWebAssemblyInstantiate.bind(
+      this,
+    ) as any;
   }
 
   private async onWebAssemblyInstantiateStreaming(
@@ -421,8 +435,8 @@ export class Runtime {
     let bufferSource: ArrayBuffer;
     const page = getPageWindow();
     if (source && typeof (source as any).then === "function") {
-      bufferSource = await (source as PromiseLike<Response>).then((res: Response) =>
-        res.arrayBuffer(),
+      bufferSource = await (source as PromiseLike<Response>).then(
+        (res: Response) => res.arrayBuffer(),
       );
     } else if (source instanceof page.Response) {
       bufferSource = await (source as Response).arrayBuffer();
@@ -503,7 +517,9 @@ export class Runtime {
   private isLikelyUnityFrame(): boolean {
     const page = getPageWindow();
     const href = String(page.location?.href || "").toLowerCase();
-    const scripts = Array.from(page.document?.scripts || []) as HTMLScriptElement[];
+    const scripts = Array.from(
+      page.document?.scripts || [],
+    ) as HTMLScriptElement[];
     return (
       typeof page.createUnityInstance === "function" ||
       href.includes("unity") ||
@@ -577,14 +593,13 @@ export class Runtime {
 
         const bufferUint8Array = new Uint8Array(bufferSource);
         this.wasmCacheKey = this.makeWasmCacheKey(bufferSource);
-        const cachedIl2CppFunctions = await this.readIl2CppFunctionCache().catch(
-          () => undefined,
-        );
+        const cachedIl2CppFunctionCache =
+          await this.readIl2CppFunctionCache().catch(() => undefined);
         const hasHooks = this.plugins.some((plugin) => plugin.hooks.length > 0);
         const hasBytecodePatches = this.plugins.some(
           (plugin) => plugin.bytecodePatches.length > 0,
         );
-        if (!cachedIl2CppFunctions || hasBytecodePatches) {
+        if (!cachedIl2CppFunctionCache || hasBytecodePatches) {
           const wailPreparser = new WailParser(bufferUint8Array);
           wailPreparser._optionalSectionFlags |= 1 << SECTION_CODE;
           wailPreparser._optionalSectionFlags |= 1 << SECTION_ELEMENT;
@@ -595,20 +610,24 @@ export class Runtime {
           this.wasmImportFunctionCount =
             (wailPreparser as any)._importFuncCount || 0;
         }
-        if (cachedIl2CppFunctions) {
-          this.resolvedIl2CppFunctions = cachedIl2CppFunctions;
+        if (cachedIl2CppFunctionCache) {
+          this.resolvedIl2CppFunctions =
+            cachedIl2CppFunctionCache.resolvedIl2CppFunctions;
+          this.stringNewEncoding =
+            cachedIl2CppFunctionCache.stringNewEncoding || "utf8";
           this.candidateIl2CppFunctions = {};
           this.logger.info(
-            "Loaded IL2CPP function resolver cache: string_new=%d object_new=%d",
-            cachedIl2CppFunctions["il2cpp_string_new"],
-            cachedIl2CppFunctions["il2cpp_object_new"],
+            "Loaded IL2CPP function resolver cache: string_new=%d (%s) object_new=%d",
+            this.resolvedIl2CppFunctions["il2cpp_string_new"],
+            this.stringNewEncoding,
+            this.resolvedIl2CppFunctions["il2cpp_object_new"],
           );
         } else {
           this.resolveIl2CppFunctions(importObject);
           this.saveIl2CppFunctionCache();
         }
         if (
-          cachedIl2CppFunctions &&
+          cachedIl2CppFunctionCache &&
           Object.keys(this.candidateIl2CppFunctions).length === 0 &&
           !hasBytecodePatches
         ) {
@@ -627,11 +646,13 @@ export class Runtime {
             (source: WebAssembly.WebAssemblyInstantiatedSource) => {
               const tableName: string =
                 this.tableName ||
-                this.resolveTableName(
-                  (source as any).instance.exports,
-                );
+                this.resolveTableName((source as any).instance.exports);
               for (const plugin of this.plugins) {
-                this.logger.info("Loading [%s %s]", plugin.name, plugin.version);
+                this.logger.info(
+                  "Loading [%s %s]",
+                  plugin.name,
+                  plugin.version,
+                );
                 for (const hook of plugin.hooks) {
                   hook.tableIndex = this.getTableIndex(
                     hook.typeName,
@@ -755,7 +776,8 @@ export class Runtime {
               };
             }
             const importModuleName = "env";
-            if (!importObject[importModuleName]) importObject[importModuleName] = {};
+            if (!importObject[importModuleName])
+              importObject[importModuleName] = {};
             (importObject[importModuleName] as any)[injectName] = injectFunc;
             const injectType = this.internalWasmTypes.findIndex(
               (type: any) =>
@@ -808,7 +830,9 @@ export class Runtime {
               );
             const unappliedHooks = this.getUnappliedHooks();
             unappliedHooks.forEach((hook) => {
-              if (!this.applyIndirectHook(instantiatedSource, hook, tableName)) {
+              if (
+                !this.applyIndirectHook(instantiatedSource, hook, tableName)
+              ) {
                 this.logger.warn(
                   "Hook %s.%s was not applied",
                   hook.typeName,
@@ -899,11 +923,7 @@ export class Runtime {
           (wrapped as any).__unityWebModkitImportHook = true;
           imports[importName] = wrapped;
           hook.applied = true;
-          this.logger.info(
-            "Hooked wasm import %s.%s",
-            moduleName,
-            importName,
-          );
+          this.logger.info("Hooked wasm import %s.%s", moduleName, importName);
         }
       }
 
@@ -966,7 +986,11 @@ export class Runtime {
   ) {
     if (!this.isValidTableIndex(hook.tableIndex)) return false;
     const table = (instantiatedSource as any).instance.exports[tableName];
-    if (!table || typeof table.get !== "function" || typeof table.set !== "function")
+    if (
+      !table ||
+      typeof table.get !== "function" ||
+      typeof table.set !== "function"
+    )
       return false;
 
     const originalFunc = table.get(hook.tableIndex);
@@ -976,19 +1000,24 @@ export class Runtime {
     const jsImpl = !hook.kind
       ? (...args: number[]) => {
           if (!hook.enabled) {
-            return hook.returnType ? originalFunc(...args) : originalFunc(...args);
+            return hook.returnType
+              ? originalFunc(...args)
+              : originalFunc(...args);
           }
           const wrappedArgs = args.map((arg) => new ValueWrapper(arg));
           const result = hook.callback(...wrappedArgs);
           args = wrappedArgs.map((arg) => arg.val());
           if (result === undefined || result === true) {
-            return hook.returnType ? originalFunc(...args) : originalFunc(...args);
+            return hook.returnType
+              ? originalFunc(...args)
+              : originalFunc(...args);
           }
           return hook.returnType ? 0 : undefined;
         }
       : (...args: number[]) => {
           let originalResult = originalFunc(...args);
-          if (!hook.enabled) return hook.returnType ? originalResult : undefined;
+          if (!hook.enabled)
+            return hook.returnType ? originalResult : undefined;
           if (originalResult !== undefined)
             originalResult = new ValueWrapper(originalResult);
           const wrappedArgs = args.map((arg) => new ValueWrapper(arg));
@@ -996,7 +1025,10 @@ export class Runtime {
           return originalResult?.val();
         };
 
-    table.set(hook.tableIndex, this.makeWasmFunc(hook.params, hookResults, jsImpl));
+    table.set(
+      hook.tableIndex,
+      this.makeWasmFunc(hook.params, hookResults, jsImpl),
+    );
     hook.applied = true;
     return true;
   }
@@ -1084,7 +1116,9 @@ export class Runtime {
     for (let i = 0; i < sampleWindow; i++) mix(bytes[i]);
     const tailStart = Math.max(sampleWindow, bytes.length - sampleWindow);
     for (let i = tailStart; i < bytes.length; i++) mix(bytes[i]);
-    return `${this.globalMetadata?.integrityHash || "no-metadata"}:${bytes.length}:${hash.toString(16)}`;
+    return `${this.globalMetadata?.integrityHash || "no-metadata"}:${
+      bytes.length
+    }:${hash.toString(16)}`;
   }
 
   private resolveIl2CppFunctions(importObject: WebAssembly.Imports) {
@@ -1093,24 +1127,33 @@ export class Runtime {
     const il2CppStringNew = this.findIl2CppStringNewLen();
     if (il2CppStringNew) {
       this.resolvedIl2CppFunctions["il2cpp_string_new"] = il2CppStringNew;
+      this.stringNewEncoding = "utf8";
       this.logger.info(
         "Resolved il2cpp_string_new_len statically at function index %d",
         il2CppStringNew,
       );
     } else {
-      this.candidateIl2CppFunctions["il2cpp_string_new"] = this.findWasmFunctionCandidates({
-        params: ["i32", "i32"],
-        returnType: "i32",
-        startsWith: [[35, 0, 65]],
-        maxBodyLength: 2048,
-        containsAll: [[32, 0], [32, 1], [16]],
-      })
-        .slice(0, 32)
-        .map((func: any) => this.toGlobalFunctionIndex(func.preservedIndex));
-      this.logger.warn(
-        "Unable to statically resolve il2cpp_string_new_len; exporting %d runtime candidate(s)",
-        this.candidateIl2CppFunctions["il2cpp_string_new"].length,
-      );
+      const il2CppStringNewUtf16 = this.findIl2CppStringNewUtf16Len();
+      if (il2CppStringNewUtf16) {
+        this.resolvedIl2CppFunctions["il2cpp_string_new"] =
+          il2CppStringNewUtf16;
+        this.stringNewEncoding = "utf16";
+        this.logger.info(
+          "Resolved il2cpp_string_new_utf16_len statically at function index %d",
+          il2CppStringNewUtf16,
+        );
+      } else {
+        this.candidateIl2CppFunctions["il2cpp_string_new"] =
+          this.findIl2CppStringNewCandidates()
+            .slice(0, 32)
+            .map((func: any) =>
+              this.toGlobalFunctionIndex(func.preservedIndex),
+            );
+        this.logger.warn(
+          "Unable to statically resolve il2cpp_string_new_len; exporting %d runtime candidate(s)",
+          this.candidateIl2CppFunctions["il2cpp_string_new"].length,
+        );
+      }
     }
 
     const il2CppObjectNew = this.findIl2CppObjectNew();
@@ -1121,7 +1164,14 @@ export class Runtime {
         il2CppObjectNew,
       );
     } else {
-      this.logger.warn("Unable to statically resolve il2cpp_object_new");
+      this.candidateIl2CppFunctions["il2cpp_object_new"] =
+        this.findIl2CppObjectNewCandidates()
+          .slice(0, 32)
+          .map((func: any) => this.toGlobalFunctionIndex(func.preservedIndex));
+      this.logger.warn(
+        "Unable to statically resolve il2cpp_object_new; exporting %d runtime candidate(s)",
+        this.candidateIl2CppFunctions["il2cpp_object_new"].length,
+      );
     }
   }
 
@@ -1183,22 +1233,65 @@ export class Runtime {
     return undefined;
   }
 
-  private findIl2CppObjectNew() {
+  private findIl2CppStringNewUtf16Len() {
     const candidates = this.findWasmFunctionCandidates({
-      params: ["i32"],
+      params: ["i32", "i32"],
       returnType: "i32",
-      maxBodyLength: 512,
+      maxBodyLength: 128,
       containsAll: [
-        // Il2CppClass::flags / allocation fast-path test.
-        [32, 0, 45, 0, 189, 1, 65, 32, 113],
-        // Load klass->instance_size, then call the allocator.
-        [32, 0, 40, 2, 128, 1, 16],
-        // Store klass into the new object's first word.
-        [32, 1, 32, 0, 54, 2, 0],
-        // Store null monitor/sync data into the second word.
-        [65, 0, 54, 2, 4],
+        // Allocate string object from UTF-16 code-unit length.
+        [32, 1, 16],
+        // Copy source buffer into string payload at object + 12, length * 2.
+        [34, 2, 65, 12, 106, 32, 0, 32, 1, 65, 1, 116, 16],
+        // Drop memcpy result and return the allocated string object.
+        [26, 32, 2, 11],
       ],
     });
+
+    if (candidates.length !== 1) {
+      if (candidates.length > 1) {
+        this.logger.warn(
+          "Multiple il2cpp_string_new_utf16_len static candidates found: %o",
+          candidates.map((func: any) =>
+            this.toGlobalFunctionIndex(func.preservedIndex),
+          ),
+        );
+      }
+      return undefined;
+    }
+
+    return this.toGlobalFunctionIndex(candidates[0].preservedIndex);
+  }
+
+  private findIl2CppStringNewCandidates() {
+    const oldStyleCandidates = this.findWasmFunctionCandidates({
+      params: ["i32", "i32"],
+      returnType: "i32",
+      startsWith: [[35, 0, 65]],
+      maxBodyLength: 2048,
+      containsAll: [[32, 0], [32, 1], [16]],
+    });
+    const utf16Candidates = this.findWasmFunctionCandidates({
+      params: ["i32", "i32"],
+      returnType: "i32",
+      maxBodyLength: 256,
+      containsAll: [
+        [32, 1, 16],
+        [34, 2, 65, 12, 106, 32, 0, 32, 1, 65, 1, 116, 16],
+        [26, 32, 2, 11],
+      ],
+    });
+    const seen = new Set<number>();
+    return [...oldStyleCandidates, ...utf16Candidates].filter((func: any) => {
+      const index = this.toGlobalFunctionIndex(func.preservedIndex);
+      if (seen.has(index)) return false;
+      seen.add(index);
+      return true;
+    });
+  }
+
+  private findIl2CppObjectNew() {
+    const candidates = this.findIl2CppObjectNewCandidates();
 
     if (candidates.length !== 1) {
       if (candidates.length > 1) {
@@ -1213,6 +1306,46 @@ export class Runtime {
     }
 
     return this.toGlobalFunctionIndex(candidates[0].preservedIndex);
+  }
+
+  private findIl2CppObjectNewCandidates() {
+    const legacyCandidates = this.findWasmFunctionCandidates({
+      params: ["i32"],
+      returnType: "i32",
+      maxBodyLength: 512,
+      containsAll: [
+        // Il2CppClass::flags / allocation fast-path test.
+        [32, 0, 45, 0, 189, 1, 65, 32, 113],
+        // Load klass->instance_size, then call the allocator.
+        [32, 0, 40, 2, 128, 1, 16],
+        // Store klass into the new object's first word.
+        [32, 1, 32, 0, 54, 2, 0],
+        // Store null monitor/sync data into the second word.
+        [65, 0, 54, 2, 4],
+      ],
+    });
+    const unity2019Candidates = this.findWasmFunctionCandidates({
+      params: ["i32"],
+      returnType: "i32",
+      maxBodyLength: 512,
+      containsAll: [
+        // Unity 2019 often computes klass + 0x80, then loads instance_size.
+        [32, 0, 65, 128, 1, 106],
+        [40, 2, 0, 16],
+        // Store klass into the new object's first word. The allocator result is
+        // kept by tee_local before the klass store in this codegen shape.
+        [34, 1, 32, 0, 54, 2, 0],
+        // Store null monitor/sync data into the second word.
+        [32, 1, 65, 0, 54, 2, 4],
+      ],
+    });
+    const seen = new Set<number>();
+    return [...legacyCandidates, ...unity2019Candidates].filter((func: any) => {
+      const index = this.toGlobalFunctionIndex(func.preservedIndex);
+      if (seen.has(index)) return false;
+      seen.add(index);
+      return true;
+    });
   }
 
   private getDirectCallTargets(func: any) {
@@ -1247,42 +1380,50 @@ export class Runtime {
     rejectStartsWith?: number[][];
     maxBodyLength?: number;
   }) {
-    return (this.internalWasmCode || []).filter((func: any) => {
-      const typeInfo = this.getWasmFunctionType(func);
-      if (!typeInfo) return false;
-      if (JSON.stringify(typeInfo.params) !== JSON.stringify(opts.params))
-        return false;
-      if ((typeInfo.returnType || undefined) !== (opts.returnType || undefined))
-        return false;
-      const bytes = concatenateUint8Arrays(func.instructions || []);
-      if (opts.maxBodyLength && bytes.length > opts.maxBodyLength) return false;
-      if (
-        opts.rejectStartsWith?.some((pattern) =>
-          uint8ArrayStartsWith(bytes, pattern),
+    return (this.internalWasmCode || [])
+      .filter((func: any) => {
+        const typeInfo = this.getWasmFunctionType(func);
+        if (!typeInfo) return false;
+        if (JSON.stringify(typeInfo.params) !== JSON.stringify(opts.params))
+          return false;
+        if (
+          (typeInfo.returnType || undefined) !== (opts.returnType || undefined)
         )
-      ) {
-        return false;
-      }
-      if (
-        opts.startsWith &&
-        !opts.startsWith.some((pattern) => uint8ArrayStartsWith(bytes, pattern))
-      ) {
-        return false;
-      }
-      if (
-        opts.containsAll &&
-        !opts.containsAll.every(
-          (pattern) => patternSearch(bytes, new Uint8Array(pattern)).length > 0,
-        )
-      ) {
-        return false;
-      }
-      return Boolean(opts.startsWith || opts.containsAll);
-    }).sort(
-      (a: any, b: any) =>
-        concatenateUint8Arrays(a.instructions || []).length -
-        concatenateUint8Arrays(b.instructions || []).length,
-    );
+          return false;
+        const bytes = concatenateUint8Arrays(func.instructions || []);
+        if (opts.maxBodyLength && bytes.length > opts.maxBodyLength)
+          return false;
+        if (
+          opts.rejectStartsWith?.some((pattern) =>
+            uint8ArrayStartsWith(bytes, pattern),
+          )
+        ) {
+          return false;
+        }
+        if (
+          opts.startsWith &&
+          !opts.startsWith.some((pattern) =>
+            uint8ArrayStartsWith(bytes, pattern),
+          )
+        ) {
+          return false;
+        }
+        if (
+          opts.containsAll &&
+          !opts.containsAll.every(
+            (pattern) =>
+              patternSearch(bytes, new Uint8Array(pattern)).length > 0,
+          )
+        ) {
+          return false;
+        }
+        return Boolean(opts.startsWith || opts.containsAll);
+      })
+      .sort(
+        (a: any, b: any) =>
+          concatenateUint8Arrays(a.instructions || []).length -
+          concatenateUint8Arrays(b.instructions || []).length,
+      );
   }
 
   private getWasmFunctionType(func: any) {
@@ -1307,7 +1448,9 @@ export class Runtime {
         kind: "func",
       });
     }
-    for (const [key, candidates] of Object.entries(this.candidateIl2CppFunctions)) {
+    for (const [key, candidates] of Object.entries(
+      this.candidateIl2CppFunctions,
+    )) {
       candidates.forEach((candidate, index) => {
         const value = wail.getFunctionIndex(candidate);
         wail.addExportEntry(value, {
@@ -1480,15 +1623,18 @@ export class Runtime {
     if (!_game.Module.asm.il2cpp_string_new) {
       throw new Error("il2cpp_string_new was not resolved for this build");
     }
-    const encoded = new TextEncoder().encode(char);
-    const charAlloc = this.malloc(encoded.length + 1);
-    writeUint8ArrayAtOffset(
-      _game.Module.HEAPU8,
-      encoded,
-      charAlloc,
-    );
+    const encoded = this.encodeStringForIl2Cpp(char, this.stringNewEncoding);
+    const terminatorLength = this.stringNewEncoding === "utf16" ? 2 : 1;
+    const charAlloc = this.malloc(encoded.length + terminatorLength);
+    writeUint8ArrayAtOffset(_game.Module.HEAPU8, encoded, charAlloc);
     _game.Module.HEAPU8[charAlloc + encoded.length] = 0;
-    const result = _game.Module.asm.il2cpp_string_new(charAlloc, encoded.length);
+    if (terminatorLength === 2) {
+      _game.Module.HEAPU8[charAlloc + encoded.length + 1] = 0;
+    }
+    const result = _game.Module.asm.il2cpp_string_new(
+      charAlloc,
+      this.getIl2CppStringLength(char, encoded, this.stringNewEncoding),
+    );
     this.free(charAlloc);
     return result;
   }
@@ -1501,23 +1647,55 @@ export class Runtime {
       candidates.length,
     );
     for (const candidate of candidates) {
-      const encoded = new TextEncoder().encode(sample);
-      const charAlloc = this.malloc(encoded.length + 1);
-      try {
-        writeUint8ArrayAtOffset(_game.Module.HEAPU8, encoded, charAlloc);
-        _game.Module.HEAPU8[charAlloc + encoded.length] = 0;
-        const result = candidate(charAlloc, encoded.length);
-        if (result > 0 && new ValueWrapper(result).mstr() === sample) {
-          this.logger.info("Resolved il2cpp_string_new at runtime");
-          return candidate;
+      for (const encoding of ["utf8", "utf16"] as const) {
+        const encoded = this.encodeStringForIl2Cpp(sample, encoding);
+        const terminatorLength = encoding === "utf16" ? 2 : 1;
+        const charAlloc = this.malloc(encoded.length + terminatorLength);
+        try {
+          writeUint8ArrayAtOffset(_game.Module.HEAPU8, encoded, charAlloc);
+          _game.Module.HEAPU8[charAlloc + encoded.length] = 0;
+          if (terminatorLength === 2) {
+            _game.Module.HEAPU8[charAlloc + encoded.length + 1] = 0;
+          }
+          const result = candidate(
+            charAlloc,
+            this.getIl2CppStringLength(sample, encoded, encoding),
+          );
+          if (result > 0 && new ValueWrapper(result).mstr() === sample) {
+            this.stringNewEncoding = encoding;
+            this.logger.info(
+              "Resolved il2cpp_string_new at runtime using %s input",
+              encoding,
+            );
+            return candidate;
+          }
+        } catch {
+          // Try next candidate or encoding.
+        } finally {
+          this.free(charAlloc);
         }
-      } catch {
-        // Try next candidate.
-      } finally {
-        this.free(charAlloc);
       }
     }
     return undefined;
+  }
+
+  private encodeStringForIl2Cpp(value: string, encoding: "utf8" | "utf16") {
+    if (encoding === "utf8") return new TextEncoder().encode(value);
+    const encoded = new Uint8Array(value.length * 2);
+    for (let i = 0; i < value.length; i++) {
+      const codeUnit = value.charCodeAt(i);
+      encoded[i * 2] = codeUnit & 0xff;
+      encoded[i * 2 + 1] = codeUnit >>> 8;
+    }
+    return encoded;
+  }
+
+  private getIl2CppStringLength(
+    value: string,
+    encoded: Uint8Array,
+    encoding: "utf8" | "utf16",
+  ) {
+    return encoding === "utf16" ? value.length : encoded.length;
   }
 
   private resolveObjectNewAtRuntime(typeInfo: number) {
@@ -1581,9 +1759,7 @@ export class Runtime {
       return ptr;
     }
 
-    throw new Error(
-      "No Unity allocator is available on Module or Module.asm",
-    );
+    throw new Error("No Unity allocator is available on Module or Module.asm");
   }
 
   public alloc(size: number): ManagedAllocation {
@@ -1645,11 +1821,15 @@ export class Runtime {
     }
 
     const exactField = fieldData[targetClass]?.[fieldName];
-    if (exactField) return override === undefined ? exactField : { ...exactField, offset: override };
+    if (exactField)
+      return override === undefined
+        ? exactField
+        : { ...exactField, offset: override };
 
     for (const typeName of this.getCandidateTypeNames(targetClass)) {
       const field = fieldData[typeName]?.[fieldName];
-      if (field) return override === undefined ? field : { ...field, offset: override };
+      if (field)
+        return override === undefined ? field : { ...field, offset: override };
     }
 
     return override === undefined ? undefined : { offset: override };
@@ -1668,7 +1848,9 @@ export class Runtime {
     const exact = this.fieldOffsetOverrides[targetClass]?.[fieldName];
     if (exact !== undefined) return exact;
     const shortName = targetClass.split(".").pop() || targetClass;
-    for (const [typeName, fields] of Object.entries(this.fieldOffsetOverrides)) {
+    for (const [typeName, fields] of Object.entries(
+      this.fieldOffsetOverrides,
+    )) {
       if (typeName === shortName || typeName.endsWith(`.${shortName}`)) {
         const value = fields[fieldName];
         if (value !== undefined) return value;
@@ -1732,8 +1914,14 @@ export class Runtime {
     return this.internalMappings[0].elements[tableIndex - 1];
   }
 
-  private isValidTableIndex(tableIndex: number | undefined): tableIndex is number {
-    return typeof tableIndex === "number" && Number.isFinite(tableIndex) && tableIndex >= 0;
+  private isValidTableIndex(
+    tableIndex: number | undefined,
+  ): tableIndex is number {
+    return (
+      typeof tableIndex === "number" &&
+      Number.isFinite(tableIndex) &&
+      tableIndex >= 0
+    );
   }
 
   private isValidInternalIndex(index: number | undefined): index is number {
@@ -1919,7 +2107,10 @@ class ModkitPlugin {
     return hook;
   }
 
-  public patchBytecode(target: MethodTarget, bytecode: number[]): BytecodePatch {
+  public patchBytecode(
+    target: MethodTarget,
+    bytecode: number[],
+  ): BytecodePatch {
     const parsed = this.parseMethodTarget(target);
     const patch: BytecodePatch = {
       typeName: parsed.typeName,
@@ -2122,10 +2313,7 @@ export class ValueWrapper {
     try {
       const _game = ValueWrapper.getRuntime().getUnityInstance();
       const classPtr = new DataView(
-        _game.Module.HEAPU8.slice(
-          this._result,
-          this._result + 4,
-        ).buffer,
+        _game.Module.HEAPU8.slice(this._result, this._result + 4).buffer,
       ).getUint32(0, true);
       let classNamePtr = new DataView(
         _game.Module.HEAPU8.slice(classPtr + 8, classPtr + 12).buffer,
@@ -2162,10 +2350,16 @@ export class ValueWrapper {
     }
   }
 
-  public readFieldByName(typeName: string, fieldName: string, dataType: string) {
+  public readFieldByName(
+    typeName: string,
+    fieldName: string,
+    dataType: string,
+  ) {
     const field = ValueWrapper.getRuntime().getFieldInfo(typeName, fieldName);
     if (!field || field.offset < 0) {
-      throw new Error(`Unable to resolve field offset for ${typeName}.${fieldName}`);
+      throw new Error(
+        `Unable to resolve field offset for ${typeName}.${fieldName}`,
+      );
     }
     return this.readField(field.offset, dataType);
   }
@@ -2208,7 +2402,9 @@ export class ValueWrapper {
   ) {
     const field = ValueWrapper.getRuntime().getFieldInfo(typeName, fieldName);
     if (!field || field.offset < 0) {
-      throw new Error(`Unable to resolve field offset for ${typeName}.${fieldName}`);
+      throw new Error(
+        `Unable to resolve field offset for ${typeName}.${fieldName}`,
+      );
     }
     this.writeField(field.offset, dataType, value);
   }

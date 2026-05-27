@@ -6,6 +6,12 @@ Initial NextUWMK release.
 
 Compared with the original UnityWebModkit base, this version adds or updates:
 
+- UnityCache probing for Unity loader builds that return empty `304` XHR responses while storing real payloads under `UnityCache.XMLHttpRequest[*].xhr.response`.
+- IL2CPP helper resolution improvements:
+  - Unity 2019-style `il2cpp_object_new` static resolver support.
+  - UTF-16 `il2cpp_string_new_len` static resolver support.
+  - Managed string creation now tracks whether the resolved string helper expects UTF-8 or UTF-16 input.
+  - IL2CPP helper resolver cache now stores the managed string input encoding.
 - Runtime Unity WebGL candidate detection before wasm interception.
 - Unity WebGL data probing and metadata loading fallback from browser cache/runtime data.
 - IndexedDB cache versioning for parsed metadata and IL2CPP function mappings.

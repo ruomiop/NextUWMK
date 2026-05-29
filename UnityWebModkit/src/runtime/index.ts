@@ -69,6 +69,7 @@ export class Runtime {
   private internalWasmTypes: any;
   private internalWasmFunctions: any;
   private internalWasmCode: any;
+  private wasmExports: any;
   private wasmCacheKey = "";
   private wasmImportFunctionCount = 0;
   private stringNewEncoding: "utf8" | "utf16" = "utf8";
@@ -556,6 +557,7 @@ export class Runtime {
           this.logger.message("Chainloader initialized");
           this.logger.info("%d plugin(s) to load", this.plugins.length);
           this.instantiate(bufferSource, importObject).then((source: any) => {
+            this.rememberWasmExports(source);
             const tableName =
               this.tableName || this.resolveTableName(source.instance.exports);
             for (const plugin of this.plugins) {
@@ -644,6 +646,7 @@ export class Runtime {
           this.logger.info("%d plugin(s) to load", this.plugins.length);
           this.instantiate(patchedBuffer, importObject).then(
             (source: WebAssembly.WebAssemblyInstantiatedSource) => {
+              this.rememberWasmExports(source);
               const tableName: string =
                 this.tableName ||
                 this.resolveTableName((source as any).instance.exports);
@@ -739,8 +742,13 @@ export class Runtime {
             let injectFunc = null;
             if (!useHook.kind) {
               injectFunc = (...args: number[]) => {
-                const _game = this.getUnityInstance();
-                const originalFunction = _game.Module.asm[originalExportName];
+                const originalFunction =
+                  this.getWasmExportFunction(originalExportName);
+                if (!originalFunction) {
+                  throw new Error(
+                    `Unable to locate original hook export ${originalExportName}`,
+                  );
+                }
                 if (!useHook.enabled) {
                   if (useHook.returnType) {
                     return originalFunction(...args);
@@ -763,8 +771,13 @@ export class Runtime {
               };
             } else {
               injectFunc = (...args: number[]) => {
-                const _game = this.getUnityInstance();
-                const originalFunction = _game.Module.asm[originalExportName];
+                const originalFunction =
+                  this.getWasmExportFunction(originalExportName);
+                if (!originalFunction) {
+                  throw new Error(
+                    `Unable to locate original hook export ${originalExportName}`,
+                  );
+                }
                 let originalResult = originalFunction(...args);
                 if (!useHook.enabled)
                   return useHook.returnType ? originalResult : undefined;
@@ -801,7 +814,6 @@ export class Runtime {
             patchedHooks.push(useHook);
             ++j;
           }
-          if (usePlugin.onLoaded) usePlugin.onLoaded();
           ++i;
         }
         wail.addInstructionParser(OP_CALL, (instrBytes: any) => {
@@ -823,6 +835,7 @@ export class Runtime {
         wail.parse();
         this.instantiate(wail.write(), importObject).then(
           (instantiatedSource: WebAssembly.WebAssemblyInstantiatedSource) => {
+            this.rememberWasmExports(instantiatedSource);
             const tableName: string =
               this.tableName ||
               this.resolveTableName(
@@ -840,6 +853,9 @@ export class Runtime {
                 );
               }
             });
+            for (const plugin of this.plugins) {
+              if (plugin.onLoaded) plugin.onLoaded();
+            }
             this.logger.message("Chainloader startup complete");
             resolve(instantiatedSource);
           },
@@ -1594,33 +1610,53 @@ export class Runtime {
     return candidate.instance || candidate;
   }
 
+  private rememberWasmExports(
+    source: WebAssembly.WebAssemblyInstantiatedSource,
+  ) {
+    this.wasmExports = (source as any)?.instance?.exports;
+  }
+
+  private getWasmExportFunction(name: string) {
+    const _game = this.getUnityInstance();
+    const candidates = [
+      _game?.Module?.asm?.[name],
+      this.wasmExports?.[name],
+      (getPageWindow() as any)?.Module?.asm?.[name],
+    ];
+    return candidates.find((candidate) => typeof candidate === "function");
+  }
+
   public createObject(typeInfo: number | ValueWrapper): number {
     const _game = this.getUnityInstance();
-    if (!_game.Module.asm.il2cpp_object_new) {
+    let objectNew = this.getWasmExportFunction("il2cpp_object_new");
+    if (!objectNew) {
       const resolved = this.resolveObjectNewAtRuntime(
         typeInfo instanceof ValueWrapper ? typeInfo.val() : typeInfo,
       );
       if (resolved) {
         _game.Module.asm.il2cpp_object_new = resolved;
+        objectNew = resolved;
       }
     }
-    if (!_game.Module.asm.il2cpp_object_new) {
+    if (!objectNew) {
       throw new Error("il2cpp_object_new was not resolved for this build");
     }
-    return _game.Module.asm.il2cpp_object_new(
+    return objectNew(
       typeInfo instanceof ValueWrapper ? typeInfo.val() : typeInfo,
     );
   }
 
   public createMstr(char: string): number {
     const _game = this.getUnityInstance();
-    if (!_game.Module.asm.il2cpp_string_new) {
+    let stringNew = this.getWasmExportFunction("il2cpp_string_new");
+    if (!stringNew) {
       const resolved = this.resolveStringNewAtRuntime(char);
       if (resolved) {
         _game.Module.asm.il2cpp_string_new = resolved;
+        stringNew = resolved;
       }
     }
-    if (!_game.Module.asm.il2cpp_string_new) {
+    if (!stringNew) {
       throw new Error("il2cpp_string_new was not resolved for this build");
     }
     const encoded = this.encodeStringForIl2Cpp(char, this.stringNewEncoding);
@@ -1631,7 +1667,7 @@ export class Runtime {
     if (terminatorLength === 2) {
       _game.Module.HEAPU8[charAlloc + encoded.length + 1] = 0;
     }
-    const result = _game.Module.asm.il2cpp_string_new(
+    const result = stringNew(
       charAlloc,
       this.getIl2CppStringLength(char, encoded, this.stringNewEncoding),
     );
@@ -1727,14 +1763,14 @@ export class Runtime {
 
   private getExportedCandidates(name: string) {
     const asm = this.getUnityInstance().Module.asm;
-    return Object.keys(asm)
+    return Object.keys({ ...this.wasmExports, ...asm })
       .filter((key) => key.startsWith(`__uwm_candidate_${name}_`))
       .sort((a, b) => {
         const ai = Number(a.split("_").pop());
         const bi = Number(b.split("_").pop());
         return ai - bi;
       })
-      .map((key) => asm[key])
+      .map((key) => asm[key] || this.wasmExports?.[key])
       .filter((value) => typeof value === "function");
   }
 

@@ -1830,7 +1830,7 @@ export class Runtime {
     module: any,
     names: string[],
   ): ((...args: any[]) => any) | undefined {
-    const owners = [module, module?.asm];
+    const owners = [this.wasmExports, module?.asm, module];
     for (const owner of owners) {
       if (!owner) continue;
       for (const name of names) {

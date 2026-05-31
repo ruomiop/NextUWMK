@@ -2269,20 +2269,10 @@ export class Runtime {
   }
 
   public listMethods(targetClass?: string) {
-    const scriptData = this.il2CppContext?.scriptData;
-    if (!scriptData) return [];
-
-    const typeNames = targetClass
-      ? this.getCandidateMethodTypeNames(targetClass)
-      : Object.keys(scriptData);
-
-    return typeNames.flatMap((typeName) =>
-      Object.entries(scriptData[typeName] || {}).map(([name, tableIndex]) => ({
-        typeName,
-        name,
-        tableIndex,
-      })),
-    );
+    const entries = this.buildMethodEntries();
+    if (!targetClass) return entries;
+    const candidateTypes = new Set(this.getCandidateMethodTypeNames(targetClass));
+    return entries.filter((entry) => candidateTypes.has(entry.typeName));
   }
 
   public findMethods(pattern: string) {
@@ -2292,6 +2282,86 @@ export class Runtime {
         method.typeName.toLowerCase().includes(needle) ||
         method.name.toLowerCase().includes(needle),
     );
+  }
+
+  private buildMethodEntries() {
+    if (!this.globalMetadata || !this.il2CppContext) return [];
+    const reader = new BinaryReader(this.globalMetadata.buffer);
+    const stringOffset = this.getMetadataSectionOffset("string", "strings");
+    const entries: Array<{
+      typeName: string;
+      name: string;
+      tableIndex: number;
+      methodIndex?: number;
+      token: number;
+      parameterCount: number;
+      parameterStart: number;
+      returnType: number;
+      genericContainerIndex: number;
+    }> = [];
+
+    for (const imageDef of this.globalMetadata.imageDefs) {
+      const imageName = this.getMetadataString(
+        reader,
+        stringOffset,
+        imageDef.nameIndex,
+      );
+      const ptrs = this.il2CppContext.codeGenModuleMethodPointers?.[imageName];
+      if (!ptrs) continue;
+
+      const typeEnd = imageDef.typeStart + imageDef.typeCount;
+      for (const typeDef of this.globalMetadata.typeDefs) {
+        const typeIndex = typeDef.typeIndex;
+        if (
+          typeIndex === undefined ||
+          typeIndex < imageDef.typeStart ||
+          typeIndex >= typeEnd
+        ) {
+          continue;
+        }
+        const name = this.getMetadataString(reader, stringOffset, typeDef.nameIndex);
+        const namespaceName = this.getMetadataString(
+          reader,
+          stringOffset,
+          typeDef.namespaceIndex,
+        );
+        const typeName = namespaceName ? `${namespaceName}.${name}` : name;
+        const typeEntries: typeof entries = [];
+        const methodEnd = typeDef.methodStart + typeDef.method_count;
+        for (let i = typeDef.methodStart; i < methodEnd; i++) {
+          const methodDef = this.globalMetadata.methodDefs.find(
+            (def) => def.methodIndex === i,
+          );
+          if (!methodDef) continue;
+          let methodName = this.getMetadataString(
+            reader,
+            stringOffset,
+            methodDef.nameIndex,
+          );
+          const methodPointerIndex = methodDef.token & 0x00ffffff;
+          const tableIndex = ptrs[methodPointerIndex - 1];
+          if (tableIndex === undefined) continue;
+          const existing = typeEntries.find((entry) => entry.name === methodName);
+          if (existing) {
+            existing.name = `${existing.name}_${existing.tableIndex}`;
+            methodName = `${methodName}_${tableIndex}`;
+          }
+          typeEntries.push({
+            typeName,
+            name: methodName,
+            tableIndex,
+            methodIndex: methodDef.methodIndex,
+            token: methodDef.token,
+            parameterCount: methodDef.parameterCount,
+            parameterStart: methodDef.parameterStart,
+            returnType: methodDef.returnType,
+            genericContainerIndex: methodDef.genericContainerIndex,
+          });
+        }
+        entries.push(...typeEntries);
+      }
+    }
+    return entries;
   }
 
   public findTypes(pattern: string) {
@@ -3288,7 +3358,7 @@ class ObjectQueryApi {
   }
 
   private getFindObjectsTargets() {
-    const dynamicTargets = this.plugin
+    const dynamicMethods = this.plugin
       .findMethods("FindObjects")
       .filter(
         (method) =>
@@ -3297,7 +3367,9 @@ class ObjectQueryApi {
           method.typeName.endsWith(".Object") ||
           method.typeName.endsWith(".Resources"),
       )
-      .sort((a, b) => this.rankFindObjectsMethod(a.name) - this.rankFindObjectsMethod(b.name))
+      .sort((a, b) => this.rankFindObjectsMethod(a.name) - this.rankFindObjectsMethod(b.name));
+    this.plugin.diag("objects.findByType method metadata", dynamicMethods);
+    const dynamicTargets = dynamicMethods
       .map((method) => `${method.typeName}$$${method.name}`);
 
     const fallbackTargets = [

@@ -2349,7 +2349,21 @@ export class ValueWrapper {
   }
 
   public mstr() {
-    return ValueWrapper.readUtf16Char(this._result + 12);
+    const _game = ValueWrapper.getRuntime().getUnityInstance();
+    const heap = _game.Module.HEAPU8;
+    const view = new DataView(heap.buffer);
+    const length = view.getInt32(this._result + 8, true);
+    if (length < 0 || length > 0x100000) {
+      throw new Error(`Invalid managed string length: ${length}`);
+    }
+    const byteOffset = this._result + 12;
+    const byteLength = length * 2;
+    if (byteOffset < 0 || byteOffset + byteLength > heap.byteLength) {
+      throw new Error("Managed string points outside the wasm heap");
+    }
+    return new TextDecoder("utf-16le").decode(
+      heap.slice(byteOffset, byteOffset + byteLength),
+    );
   }
 
   public deref(): ValueWrapper | undefined {
@@ -2457,17 +2471,20 @@ export class ValueWrapper {
     this.writeField(field.offset, dataType, value);
   }
 
-  private static readUtf16Char(ptr: number) {
+  private static readUtf16Char(ptr: number, maxCodeUnits = 0x10000) {
     const _game = ValueWrapper.getRuntime().getUnityInstance();
     let buffer = new Uint16Array(_game.Module.HEAPU8.buffer);
     let offset = ptr / 2; // divide by 2 to convert from byte offset to character offset
     let subarray = [];
     let charCode = buffer[offset];
 
-    while (charCode !== 0) {
+    while (charCode !== 0 && subarray.length < maxCodeUnits) {
       subarray.push(charCode);
       offset++;
       charCode = buffer[offset];
+    }
+    if (subarray.length >= maxCodeUnits) {
+      throw new Error("UTF-16 string scan exceeded the maximum length");
     }
 
     let decoder = new TextDecoder("utf-16le");

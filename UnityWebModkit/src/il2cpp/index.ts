@@ -303,6 +303,7 @@ export function createIl2CppContext(
   }
   const scriptData: Il2CppScriptData = {};
   const fieldData: Il2CppFieldData = {};
+  let activeMetadataRegistration = metadataRegistration;
   let fieldOffsets = metadataRegistration
     ? readFieldOffsets(memoryReader, metadataRegistration, metadata.version)
     : [];
@@ -315,6 +316,7 @@ export function createIl2CppContext(
       fallbackMetadataRegistration &&
       fallbackMetadataRegistration !== metadataRegistration
     ) {
+      activeMetadataRegistration = fallbackMetadataRegistration;
       fieldOffsets = readFieldOffsets(
         memoryReader,
         fallbackMetadataRegistration,
@@ -322,9 +324,11 @@ export function createIl2CppContext(
       );
     }
   }
-  const computedFieldOffsets = !hasUsableFieldOffsets(fieldOffsets, metadata.typeDefs)
-    ? computeManagedFieldOffsets(memoryReader, metadataRegistration, metadata)
-    : new Map<number, number>();
+  const computedFieldOffsets = computeManagedFieldOffsets(
+    memoryReader,
+    activeMetadataRegistration,
+    metadata,
+  );
   const metadataReader = new BinaryReader(metadata.buffer);
   const stringOffset = getSectionOffset(metadata.header, "string", "strings");
   for (let j = 0; j < metadata.imageDefs.length; j++) {

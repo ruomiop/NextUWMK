@@ -3458,7 +3458,8 @@ class ObjectQueryApi {
           (method.typeName === "UnityEngine.Object" ||
             method.typeName.endsWith(".Object")) &&
           method.name.startsWith("FindObject") &&
-          !method.name.startsWith("FindObjects"),
+          !method.name.startsWith("FindObjects") &&
+          !method.name.startsWith("FindObjectFromInstanceID"),
       )
       .sort((a, b) => this.rankFindObjectMethod(a.name) - this.rankFindObjectMethod(b.name));
     this.plugin.diag("objects.findByType single method metadata", dynamicMethods);
@@ -3503,6 +3504,15 @@ class ObjectQueryApi {
     return [...new Set([...dynamicTargets, ...fallback])];
   }
 
+  private pointerFromThrowable(err: unknown): number | undefined {
+    if (typeof err === "number" && this.isLikelyPointer(err)) return err;
+    if (typeof err === "string") {
+      const value = Number(err.trim());
+      if (this.isLikelyPointer(value)) return value;
+    }
+    return undefined;
+  }
+
   private tryCallPointerDirectWithDiag(
     targets: string[],
     args: any[],
@@ -3523,6 +3533,16 @@ class ObjectQueryApi {
         });
         if (result && this.isLikelyPointer(result.val())) return result;
       } catch (err) {
+        const thrownPointer = this.pointerFromThrowable(err);
+        if (thrownPointer) {
+          this.plugin.diag(`${label} threw pointer`, {
+            typeName,
+            target,
+            args: normalizedArgs,
+            result: thrownPointer,
+          });
+          return new ValueWrapper(thrownPointer);
+        }
         this.plugin.diag(`${label} failed`, {
           typeName,
           target,

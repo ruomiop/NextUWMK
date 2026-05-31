@@ -2268,6 +2268,32 @@ export class Runtime {
     );
   }
 
+  public listMethods(targetClass?: string) {
+    const scriptData = this.il2CppContext?.scriptData;
+    if (!scriptData) return [];
+
+    const typeNames = targetClass
+      ? this.getCandidateMethodTypeNames(targetClass)
+      : Object.keys(scriptData);
+
+    return typeNames.flatMap((typeName) =>
+      Object.entries(scriptData[typeName] || {}).map(([name, tableIndex]) => ({
+        typeName,
+        name,
+        tableIndex,
+      })),
+    );
+  }
+
+  public findMethods(pattern: string) {
+    const needle = pattern.toLowerCase();
+    return this.listMethods().filter(
+      (method) =>
+        method.typeName.toLowerCase().includes(needle) ||
+        method.name.toLowerCase().includes(needle),
+    );
+  }
+
   public findTypes(pattern: string) {
     if (!this.globalMetadata) return [];
     const needle = pattern.toLowerCase();
@@ -2388,6 +2414,28 @@ export class Runtime {
     add(targetClass);
     const shortName = targetClass.split(".").pop() || targetClass;
     for (const typeName of Object.keys(fieldData)) {
+      if (typeName === shortName || typeName.endsWith(`.${shortName}`)) {
+        add(typeName);
+      }
+    }
+    return candidates;
+  }
+
+  private getCandidateMethodTypeNames(targetClass: string): string[] {
+    const scriptData = this.il2CppContext?.scriptData;
+    if (!scriptData) return [];
+
+    const seen = new Set<string>();
+    const candidates: string[] = [];
+    const add = (typeName: string | undefined) => {
+      if (!typeName || seen.has(typeName) || !scriptData[typeName]) return;
+      seen.add(typeName);
+      candidates.push(typeName);
+    };
+
+    add(targetClass);
+    const shortName = targetClass.split(".").pop() || targetClass;
+    for (const typeName of Object.keys(scriptData)) {
       if (typeName === shortName || typeName.endsWith(`.${shortName}`)) {
         add(typeName);
       }
@@ -2767,6 +2815,14 @@ class ModkitPlugin {
 
   public findFields(pattern: string) {
     return this._runtime.findFields(pattern);
+  }
+
+  public listMethods(targetClass?: string) {
+    return this._runtime.listMethods(targetClass);
+  }
+
+  public findMethods(pattern: string) {
+    return this._runtime.findMethods(pattern);
   }
 
   public findTypes(pattern: string) {
@@ -3205,13 +3261,12 @@ class ObjectQueryApi {
     typeName: string,
     type: ValueWrapper,
   ): ValueWrapper | undefined {
-    const targets = [
-      "UnityEngine.Resources$$FindObjectsOfTypeAll",
-      "UnityEngine.Resources$$FindObjectsOfTypeAll_0",
-      "UnityEngine.Object$$FindObjectsOfType",
-      "UnityEngine.Object$$FindObjectsOfType_0",
-      "UnityEngine.Object$$FindObjectsOfType_12890",
-    ];
+    const targets = this.getFindObjectsTargets();
+    this.plugin.diag("objects.findByType candidates", {
+      typeName,
+      count: targets.length,
+      targets,
+    });
     const argVariants = [[type], [type, 0], [type, 1], [type, 0, 0]];
     for (const args of argVariants) {
       const direct = this.tryCallPointerDirectWithDiag(
@@ -3230,6 +3285,37 @@ class ObjectQueryApi {
       if (managed) return managed;
     }
     return undefined;
+  }
+
+  private getFindObjectsTargets() {
+    const dynamicTargets = this.plugin
+      .findMethods("FindObjects")
+      .filter(
+        (method) =>
+          method.typeName === "UnityEngine.Object" ||
+          method.typeName === "UnityEngine.Resources" ||
+          method.typeName.endsWith(".Object") ||
+          method.typeName.endsWith(".Resources"),
+      )
+      .sort((a, b) => this.rankFindObjectsMethod(a.name) - this.rankFindObjectsMethod(b.name))
+      .map((method) => `${method.typeName}$$${method.name}`);
+
+    const fallbackTargets = [
+      "UnityEngine.Resources$$FindObjectsOfTypeAll",
+      "UnityEngine.Resources$$FindObjectsOfTypeAll_0",
+      "UnityEngine.Object$$FindObjectsOfType",
+      "UnityEngine.Object$$FindObjectsOfType_0",
+      "UnityEngine.Object$$FindObjectsOfType_12890",
+    ];
+
+    return [...new Set([...dynamicTargets, ...fallbackTargets])];
+  }
+
+  private rankFindObjectsMethod(name: string) {
+    if (name.startsWith("FindObjectsOfTypeAll")) return 0;
+    if (name.startsWith("FindObjectsByType")) return 1;
+    if (name.startsWith("FindObjectsOfType")) return 2;
+    return 10;
   }
 
   private tryCallPointerDirectWithDiag(

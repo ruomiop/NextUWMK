@@ -32,6 +32,7 @@ Compared with the original UnityWebModkit base, this version adds or updates:
 - Object query type lookup now tries 1/2/3-argument `System.Type.GetType` overloads so UnityEngine runtime types resolve more reliably.
 - Plugins can now use `onReady` for scene/runtime queries after the Unity page instance has started, while `onLoaded` remains the early chainloader callback.
 - `globalName` exposure now writes to multiple browser globals when possible so console access is more reliable across userscript worlds.
+- Object query type lookup can now resolve metadata type indices through IL2CPP runtime type handles when string-based `System.Type.GetType` returns nothing.
 - Runtime calls can now use a remembered wasm module fallback before Unity exposes `unityInstance`, allowing early `onLoaded` object queries to allocate/call safely.
 - Unity web data cache probing now retries briefly during startup to avoid races where UnityCache is populated just after UWMK's first probe.
 - Metadata cache entries now carry a schema version and preserve runtime indices used by IL2CPP context reconstruction.

@@ -34,7 +34,7 @@ import { dataTypeSizes } from "../extras";
 
 const STORAGE_DB_VERSION = 5;
 const METADATA_CACHE_VERSION = 2;
-const IL2CPP_CONTEXT_CACHE_VERSION = 3;
+const IL2CPP_CONTEXT_CACHE_VERSION = 4;
 const IL2CPP_FUNCTION_CACHE_NAME = "il2cpp-functions";
 const WASM_SECTION_EXPORT = 7;
 const WASM_SECTION_TAG = 13;
@@ -2147,6 +2147,12 @@ export class Runtime {
     return candidates;
   }
 
+  public getRuntimeTypeAddress(typeIndex: number | undefined) {
+    if (typeIndex === undefined || typeIndex < 0) return undefined;
+    const address = this.il2CppContext?.typeAddresses?.[typeIndex];
+    return address && address > 0 ? address : undefined;
+  }
+
   private getMetadataSectionOffset(
     legacyName: string,
     modernName = legacyName,
@@ -2564,6 +2570,10 @@ class ModkitPlugin {
     return this._runtime.getRuntimeTypeNameCandidates(typeName);
   }
 
+  public getRuntimeTypeAddress(typeIndex: number | undefined) {
+    return this._runtime.getRuntimeTypeAddress(typeIndex);
+  }
+
   public memcpy(
     dest: ValueWrapper | number,
     src: ValueWrapper | number,
@@ -2602,6 +2612,7 @@ class ObjectQueryApi {
     const cached = this.typeCache.get(typeName);
     if (cached) return cached;
 
+    const metadataTypes = this.plugin.findTypes(typeName);
     const names = this.getTypeNameCandidates(typeName);
     for (const name of names) {
       const namePtr = this.plugin.createMstr(name);
@@ -2616,6 +2627,20 @@ class ObjectQueryApi {
           "System.Type$$GetType_4757",
         ],
         [[namePtr], [namePtr, 0], [namePtr, 0, 0]],
+      );
+      if (result && result.val() > 0) {
+        this.typeCache.set(typeName, result);
+        return result;
+      }
+    }
+    for (const metadataType of metadataTypes) {
+      const typeAddress = this.plugin.getRuntimeTypeAddress(
+        metadataType.typeIndex,
+      );
+      if (!typeAddress) continue;
+      const result = this.tryCall(
+        ["System.Type$$GetTypeFromHandle"],
+        [typeAddress],
       );
       if (result && result.val() > 0) {
         this.typeCache.set(typeName, result);

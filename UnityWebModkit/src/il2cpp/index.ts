@@ -160,6 +160,7 @@ export type Il2CppContext = {
   codeGenModuleMethodPointers: Il2CppCodeGenModuleMethodPointers;
   scriptData: Il2CppScriptData;
   fieldData: Il2CppFieldData;
+  typeAddresses?: number[];
   integrityHash?: string;
   referencedAssemblies?: string[];
   name: string;
@@ -329,6 +330,10 @@ export function createIl2CppContext(
     activeMetadataRegistration,
     metadata,
   );
+  const typeAddresses = readTypeAddresses(
+    memoryReader,
+    activeMetadataRegistration,
+  );
   const metadataReader = new BinaryReader(metadata.buffer);
   const stringOffset = getSectionOffset(metadata.header, "string", "strings");
   for (let j = 0; j < metadata.imageDefs.length; j++) {
@@ -408,9 +413,10 @@ export function createIl2CppContext(
         );
         fieldData[fullTypeName][fieldName] = {
           index: fieldIndex,
-          offset: runtimeOffset >= 0
-            ? runtimeOffset
-            : computedFieldOffsets.get(fieldIndex) ?? -1,
+          offset:
+            runtimeOffset >= 0
+              ? runtimeOffset
+              : computedFieldOffsets.get(fieldIndex) ?? -1,
           token: fieldDef.token,
           typeIndex: fieldDef.typeIndex,
         };
@@ -422,6 +428,7 @@ export function createIl2CppContext(
     codeGenModuleMethodPointers,
     scriptData,
     fieldData,
+    typeAddresses,
     integrityHash: metadata.integrityHash,
     referencedAssemblies,
     name: "il2cpp",
@@ -623,21 +630,36 @@ function getMetadataIndexSizes(
 
   const interfaceOffsetsSize = getSectionSize(header, "interfaceOffsets");
   const interfaceOffsetsCount = getSectionCount(header, "interfaceOffsets");
-  const typeIndex = interfaceOffsetsCount > 0
-    ? Math.max(1, Math.min(4, interfaceOffsetsSize / interfaceOffsetsCount - 4))
-    : 4;
+  const typeIndex =
+    interfaceOffsetsCount > 0
+      ? Math.max(
+          1,
+          Math.min(4, interfaceOffsetsSize / interfaceOffsetsCount - 4),
+        )
+      : 4;
 
   return {
     typeIndex,
-    typeDefinitionIndex: getIndexSize(getSectionCount(header, "typeDefinitions")),
-    genericContainerIndex: getIndexSize(getSectionCount(header, "genericContainers")),
-    parameterIndex: version >= 39 ? getIndexSize(getSectionCount(header, "parameters")) : 4,
-    fieldIndex: version >= 106 ? getIndexSize(getSectionCount(header, "fields")) : 4,
-    methodIndex: version >= 105 ? getIndexSize(getSectionCount(header, "methods")) : 4,
-    eventIndex: version >= 104 ? getIndexSize(getSectionCount(header, "events")) : 4,
-    propertyIndex: version >= 104 ? getIndexSize(getSectionCount(header, "properties")) : 4,
-    nestedTypeIndex: version >= 104 ? getIndexSize(getSectionCount(header, "nestedTypes")) : 4,
-    interfaceOffsetIndex: version >= 104 ? getIndexSize(interfaceOffsetsCount) : 4,
+    typeDefinitionIndex: getIndexSize(
+      getSectionCount(header, "typeDefinitions"),
+    ),
+    genericContainerIndex: getIndexSize(
+      getSectionCount(header, "genericContainers"),
+    ),
+    parameterIndex:
+      version >= 39 ? getIndexSize(getSectionCount(header, "parameters")) : 4,
+    fieldIndex:
+      version >= 106 ? getIndexSize(getSectionCount(header, "fields")) : 4,
+    methodIndex:
+      version >= 105 ? getIndexSize(getSectionCount(header, "methods")) : 4,
+    eventIndex:
+      version >= 104 ? getIndexSize(getSectionCount(header, "events")) : 4,
+    propertyIndex:
+      version >= 104 ? getIndexSize(getSectionCount(header, "properties")) : 4,
+    nestedTypeIndex:
+      version >= 104 ? getIndexSize(getSectionCount(header, "nestedTypes")) : 4,
+    interfaceOffsetIndex:
+      version >= 104 ? getIndexSize(interfaceOffsetsCount) : 4,
   };
 }
 
@@ -646,11 +668,7 @@ function getSectionOffset(
   legacyName: string,
   modernName = legacyName,
 ) {
-  return (
-    header[`${modernName}Offset`] ??
-    header[`${legacyName}Offset`] ??
-    0
-  );
+  return header[`${modernName}Offset`] ?? header[`${legacyName}Offset`] ?? 0;
 }
 
 function getSectionSize(
@@ -658,11 +676,7 @@ function getSectionSize(
   legacyName: string,
   modernName = legacyName,
 ) {
-  return (
-    header[`${modernName}Size`] ??
-    header[`${legacyName}Size`] ??
-    0
-  );
+  return header[`${modernName}Size`] ?? header[`${legacyName}Size`] ?? 0;
 }
 
 function getSectionCount(
@@ -670,11 +684,7 @@ function getSectionCount(
   legacyName: string,
   modernName = legacyName,
 ) {
-  return (
-    header[`${modernName}Count`] ??
-    header[`${legacyName}Count`] ??
-    0
-  );
+  return header[`${modernName}Count`] ?? header[`${legacyName}Count`] ?? 0;
 }
 
 function getStringFromIndex(
@@ -901,9 +911,7 @@ function readTypeDefinitions(
       typeIndex: i,
       nameIndex: reader.readUint32(),
       namespaceIndex: reader.readUint32(),
-      ...(version <= 24
-        ? { customAttributeIndex: reader.readInt32() }
-        : {}),
+      ...(version <= 24 ? { customAttributeIndex: reader.readInt32() } : {}),
       byvalTypeIndex: reader.readIndex(indexSizes.typeIndex),
       ...(version < 27 ? { byrefTypeIndex: reader.readInt32() } : {}),
       declaringTypeIndex: reader.readIndex(indexSizes.typeIndex),
@@ -938,7 +946,14 @@ function readTypeDefinitions(
       token: reader.readUint32(),
     };
     i++;
-    if (!isReferencedType(imageDefinitions, offset, reader.offset - 1, typeDefStructSize))
+    if (
+      !isReferencedType(
+        imageDefinitions,
+        offset,
+        reader.offset - 1,
+        typeDefStructSize,
+      )
+    )
       continue;
     typeDefinitions.push(typeDef);
   }
@@ -1038,7 +1053,10 @@ function readFieldOffsets(
   version: number,
 ) {
   if (!isReadableAddress(reader, metadataRegistrationOffset, 64)) return [];
-  const metadataRegistration = readMetadataRegistration(reader, metadataRegistrationOffset);
+  const metadataRegistration = readMetadataRegistration(
+    reader,
+    metadataRegistrationOffset,
+  );
   const fieldOffsets: number[] = [];
   if (
     !metadataRegistration.fieldOffsetListAddress ||
@@ -1056,6 +1074,34 @@ function readFieldOffsets(
     fieldOffsets.push(reader.readUint32());
   }
   return fieldOffsets;
+}
+
+function readTypeAddresses(
+  reader: BinaryReader,
+  metadataRegistrationOffset: number,
+) {
+  if (!isReadableAddress(reader, metadataRegistrationOffset, 64)) return [];
+  const metadataRegistration = readMetadataRegistration(
+    reader,
+    metadataRegistrationOffset,
+  );
+  const typeAddresses: number[] = [];
+  if (
+    !metadataRegistration.typeAddressListAddress ||
+    !metadataRegistration.numTypes ||
+    !isReadableAddress(
+      reader,
+      metadataRegistration.typeAddressListAddress,
+      metadataRegistration.numTypes * 4,
+    )
+  ) {
+    return typeAddresses;
+  }
+  reader.seek(metadataRegistration.typeAddressListAddress);
+  for (let i = 0; i < metadataRegistration.numTypes; i++) {
+    typeAddresses.push(reader.readUint32());
+  }
+  return typeAddresses;
 }
 
 function hasUsableFieldOffsets(
@@ -1101,7 +1147,9 @@ function findMetadataRegistration(
       const typeIndex = typeDef.typeIndex ?? -1;
       if (typeIndex < 0 || typeIndex >= fieldOffsetsCount) continue;
       const pointer = view.getUint32(fieldOffsetsAddress + typeIndex * 4, true);
-      if (isReadableAddress(reader, pointer, Math.max(4, typeDef.field_count * 4))) {
+      if (
+        isReadableAddress(reader, pointer, Math.max(4, typeDef.field_count * 4))
+      ) {
         validReferencedTypeOffsets++;
       }
     }
@@ -1126,9 +1174,13 @@ function computeManagedFieldOffsets(
   metadata: Il2CppMetadata,
 ) {
   const offsets = new Map<number, number>();
-  if (!isReadableAddress(reader, metadataRegistrationOffset, 64)) return offsets;
+  if (!isReadableAddress(reader, metadataRegistrationOffset, 64))
+    return offsets;
 
-  const registration = readMetadataRegistration(reader, metadataRegistrationOffset);
+  const registration = readMetadataRegistration(
+    reader,
+    metadataRegistrationOffset,
+  );
   if (
     !registration.typeAddressListAddress ||
     !registration.numTypes ||
@@ -1143,7 +1195,8 @@ function computeManagedFieldOffsets(
 
   const typeDefsByIndex = new Map<number, Il2CppTypeDefinition>();
   for (const typeDef of metadata.typeDefs) {
-    if (typeDef.typeIndex !== undefined) typeDefsByIndex.set(typeDef.typeIndex, typeDef);
+    if (typeDef.typeIndex !== undefined)
+      typeDefsByIndex.set(typeDef.typeIndex, typeDef);
   }
 
   const classSizes = new Map<number, number>();
@@ -1151,7 +1204,8 @@ function computeManagedFieldOffsets(
 
   const readType = (typeIndex: number) => {
     if (typeIndex < 0 || typeIndex >= registration.numTypes) return undefined;
-    const typePointerOffset = registration.typeAddressListAddress + typeIndex * 4;
+    const typePointerOffset =
+      registration.typeAddressListAddress + typeIndex * 4;
     if (!isReadableAddress(reader, typePointerOffset, 4)) return undefined;
     const view = new DataView(reader.buffer);
     const typePointer = view.getUint32(typePointerOffset, true);
@@ -1222,7 +1276,9 @@ function computeManagedFieldOffsets(
     let maxAlign = 1;
     for (let i = 0; i < typeDef.field_count; i++) {
       const fieldIndex = typeDef.fieldStart + i;
-      const fieldDef = metadata.fieldDefs.find((field) => field.fieldIndex === fieldIndex);
+      const fieldDef = metadata.fieldDefs.find(
+        (field) => field.fieldIndex === fieldIndex,
+      );
       if (!fieldDef) continue;
       const fieldType = readType(fieldDef.typeIndex);
       if (fieldType && isStaticField(fieldType.attrs)) continue;
@@ -1233,7 +1289,10 @@ function computeManagedFieldOffsets(
     }
     visiting.delete(typeDefIndex);
 
-    const layout = { size: Math.max(alignTo(cursor, maxAlign), 1), align: maxAlign };
+    const layout = {
+      size: Math.max(alignTo(cursor, maxAlign), 1),
+      align: maxAlign,
+    };
     valueTypeLayouts.set(typeDefIndex, layout);
     return layout;
   };
@@ -1253,12 +1312,15 @@ function computeManagedFieldOffsets(
     const parentType = readType(typeDef.parentIndex);
     if (parentType && parentType.type === 0x12) {
       const parentDef = typeDefsByIndex.get(parentType.data);
-      if (parentDef) cursor = Math.max(cursor, computeClassSize(parentDef, visiting));
+      if (parentDef)
+        cursor = Math.max(cursor, computeClassSize(parentDef, visiting));
     }
 
     for (let i = 0; i < typeDef.field_count; i++) {
       const fieldIndex = typeDef.fieldStart + i;
-      const fieldDef = metadata.fieldDefs.find((field) => field.fieldIndex === fieldIndex);
+      const fieldDef = metadata.fieldDefs.find(
+        (field) => field.fieldIndex === fieldIndex,
+      );
       if (!fieldDef) continue;
       const fieldType = readType(fieldDef.typeIndex);
       if (fieldType && isStaticField(fieldType.attrs)) {
@@ -1312,7 +1374,10 @@ function getFieldOffset(
   }
 }
 
-function getTypeDefinitionSize(indexSizes: MetadataIndexSizes, version: number) {
+function getTypeDefinitionSize(
+  indexSizes: MetadataIndexSizes,
+  version: number,
+) {
   return (
     8 +
     (version <= 24 ? 4 : 0) +

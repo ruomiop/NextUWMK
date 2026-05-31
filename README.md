@@ -6,3 +6,7 @@ auto dynamically locate il2cpp_string_new_len il2cpp_object_new
 and support all metadata version 
 add readFieldByName which dynamically resolves field offsets at runtime using the IL2CPP metadata so no need to entry offset only name
 and some shit
+
+
+discord server
+https://discord.gg/yAYJQNmVYm

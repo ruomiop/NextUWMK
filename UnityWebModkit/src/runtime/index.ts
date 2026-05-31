@@ -2556,9 +2556,18 @@ class ObjectQueryApi {
 
     const names = this.getTypeNameCandidates(typeName);
     for (const name of names) {
-      const result = this.tryCall(
-        ["System.Type$$GetType", "System.Type$$GetType_854"],
-        [this.plugin.createMstr(name), 0],
+      const namePtr = this.plugin.createMstr(name);
+      const result = this.tryCallVariants(
+        [
+          "System.Type$$GetType",
+          "System.Type$$GetType_317",
+          "System.Type$$GetType_486",
+          "System.Type$$GetType_854",
+          "System.Type$$GetType_2232",
+          "System.Type$$GetType_4755",
+          "System.Type$$GetType_4757",
+        ],
+        [[namePtr], [namePtr, 0], [namePtr, 0, 0]],
       );
       if (result && result.val() > 0) {
         this.typeCache.set(typeName, result);

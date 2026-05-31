@@ -29,6 +29,7 @@ Compared with the original UnityWebModkit base, this version adds or updates:
 - UnityCache IndexedDB probing now supports browsers without `indexedDB.databases()` by trying the known `UnityCache` database directly, improving Firefox compatibility.
 - `createPlugin()` now supports `globalName` for exposing a plugin on the page window, and `Runtime.lastPlugin` points to the most recently created plugin.
 - Added `plugin.objects` for runtime Unity object/component queries, Transform child traversal, position reads, and Transform tree dumps. Type resolution now uses metadata-derived assembly-qualified names and falls back to `Resources.FindObjectsOfTypeAll`.
+- Object query type lookup now tries 1/2/3-argument `System.Type.GetType` overloads so UnityEngine runtime types resolve more reliably.
 - Runtime calls can now use a remembered wasm module fallback before Unity exposes `unityInstance`, allowing early `onLoaded` object queries to allocate/call safely.
 - Unity web data cache probing now retries briefly during startup to avoid races where UnityCache is populated just after UWMK's first probe.
 - Metadata cache entries now carry a schema version and preserve runtime indices used by IL2CPP context reconstruction.

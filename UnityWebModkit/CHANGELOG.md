@@ -27,6 +27,7 @@ Compared with the original UnityWebModkit base, this version adds or updates:
 - `ValueWrapper.mstr()` now reads IL2CPP managed string length from the object header instead of scanning for a null terminator, preventing runaway reads on non-null-terminated strings.
 - IL2CPP context cache entries now carry a schema version so browsers do not reuse stale field offset data after parser fixes.
 - UnityCache IndexedDB probing now supports browsers without `indexedDB.databases()` by trying the known `UnityCache` database directly, improving Firefox compatibility.
+- `createPlugin()` now supports `globalName` for exposing a plugin on the page window, and `Runtime.lastPlugin` points to the most recently created plugin.
 - Metadata cache entries now carry a schema version and preserve runtime indices used by IL2CPP context reconstruction.
 - Full type-name candidate lookup for field reads, allowing short names and namespace-qualified names.
 - Field discovery helpers:

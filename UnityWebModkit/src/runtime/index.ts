@@ -54,6 +54,7 @@ declare const FinalizationRegistry:
 
 export class Runtime {
   public tableName: string | undefined;
+  public lastPlugin: ModkitPlugin | undefined;
   private logger: Logger;
   private plugins: ModkitPlugin[] = [];
   private startedInitializing = false;
@@ -115,7 +116,29 @@ export class Runtime {
       this,
     );
     this.plugins.push(plugin);
+    this.lastPlugin = plugin;
+    this.exposePluginGlobals(plugin, opts.globalName);
     return plugin;
+  }
+
+  private exposePluginGlobals(
+    plugin: ModkitPlugin,
+    globalName?: string | string[],
+  ) {
+    const page = getPageWindow();
+    const names = Array.isArray(globalName)
+      ? globalName
+      : globalName
+        ? [globalName]
+        : [];
+    for (const name of names) {
+      if (!name) continue;
+      Object.defineProperty(page, name, {
+        value: plugin,
+        writable: true,
+        configurable: true,
+      });
+    }
   }
 
   private async initialize(): Promise<void> {
@@ -2106,6 +2129,7 @@ type ModkitPluginOptions = {
   version?: string;
   referencedAssemblies?: string[];
   preferIndirectHooks?: boolean;
+  globalName?: string | string[];
 };
 
 class ModkitPlugin {

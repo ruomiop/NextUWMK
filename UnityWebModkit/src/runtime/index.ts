@@ -2883,7 +2883,7 @@ class ObjectQueryApi {
         name,
         result: result?.val() ?? 0,
       });
-      if (result && result.val() > 0) {
+      if (result && this.isLikelyPointer(result.val())) {
         trace.result = result.val();
         this.plugin.diag("objects.resolveType success", trace);
         return trace;
@@ -2921,7 +2921,7 @@ class ObjectQueryApi {
           mode: attempt.mode,
           result: result?.val() ?? 0,
         });
-        if (result && result.val() > 0) {
+        if (result && this.isLikelyPointer(result.val())) {
           trace.result = result.val();
           this.plugin.diag("objects.resolveType success", trace);
           return trace;
@@ -3133,9 +3133,24 @@ class ObjectQueryApi {
     targets: string[],
     args: any[],
   ): ValueWrapper | undefined {
-    const direct = this.tryCall(targets, args);
+    const direct = this.tryCallPointerDirect(targets, args);
     if (direct) return direct;
     return this.tryCallManagedReturn(targets, args);
+  }
+
+  private tryCallPointerDirect(
+    targets: string[],
+    args: any[],
+  ): ValueWrapper | undefined {
+    for (const target of targets) {
+      try {
+        const result = this.plugin.call(target, args);
+        if (result && this.isLikelyPointer(result.val())) return result;
+      } catch {
+        // Try the next overload/name variant.
+      }
+    }
+    return undefined;
   }
 
   private tryCallManagedReturn(
@@ -3148,7 +3163,7 @@ class ObjectQueryApi {
         result.writeField(0, "u32", 0);
         this.plugin.call(target, [result, ...args]);
         const ptr = result.readField(0, "u32")?.val() ?? 0;
-        if (ptr > 0) return new ValueWrapper(ptr);
+        if (this.isLikelyPointer(ptr)) return new ValueWrapper(ptr);
       } catch (err) {
         this.plugin.diag("managed return call failed", {
           target,
@@ -3160,6 +3175,10 @@ class ObjectQueryApi {
       }
     }
     return undefined;
+  }
+
+  private isLikelyPointer(value: number): boolean {
+    return Number.isInteger(value) && value > 0x1000;
   }
 
   private tryCallVariants(

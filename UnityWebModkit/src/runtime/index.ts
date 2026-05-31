@@ -68,6 +68,7 @@ export class Runtime {
   private webDataProbeStarted = false;
   private webDataProbeInFlight = false;
   private webDataProbeStartedAt = 0;
+  private unityCandidateSeen = false;
   private instantiateStreaming: any;
   private instantiate: any;
   private internalMappings: any;
@@ -188,7 +189,10 @@ export class Runtime {
     this.hookWasmInstantiate();
     watchUnityWebData(
       (webData) => this.onUnityWebData(webData),
-      () => this.startWebDataProbe(),
+      () => {
+        this.unityCandidateSeen = true;
+        this.startWebDataProbe();
+      },
     );
     this.startWebDataProbe();
     if (page.__UnityWebModkitWebData) {
@@ -228,6 +232,10 @@ export class Runtime {
 
   private scheduleWebDataProbeRetry() {
     if (this.webDataLoaded) return;
+    if (this.unityCandidateSeen) {
+      this.diag("web-data probe retry skipped: waiting for Unity XHR");
+      return;
+    }
     const page = getPageWindow();
     const elapsed = Date.now() - this.webDataProbeStartedAt;
     if (elapsed > 30000) return;

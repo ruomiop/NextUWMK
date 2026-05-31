@@ -112,6 +112,11 @@ export class Runtime {
 
   public createPlugin(opts: ModkitPluginOptions): ModkitPlugin {
     if (!this.startedInitializing) this.initialize();
+    this.diag("createPlugin", {
+      name: opts.name,
+      referencedAssemblies: opts.referencedAssemblies?.length || 0,
+      globalName: opts.globalName,
+    });
     const plugin = new ModkitPlugin(
       opts.name,
       opts.version,
@@ -158,6 +163,14 @@ export class Runtime {
     }
   }
 
+  private diag(message: string, data?: any) {
+    if (data === undefined) {
+      this.logger.info("[DIAG] %s", message);
+      return;
+    }
+    this.logger.info("[DIAG] %s %o", message, data);
+  }
+
   private async initialize(): Promise<void> {
     if (typeof window === "undefined") {
       console.log(
@@ -167,6 +180,11 @@ export class Runtime {
     }
     const page = getPageWindow();
     this.startedInitializing = true;
+    this.diag("initialize", {
+      href: page.location?.href,
+      readyState: page.document?.readyState,
+      hasPageWebData: Boolean(page.__UnityWebModkitWebData),
+    });
     this.hookWasmInstantiate();
     watchUnityWebData(
       (webData) => this.onUnityWebData(webData),
@@ -183,12 +201,20 @@ export class Runtime {
     this.webDataProbeStarted = true;
     if (!this.webDataProbeStartedAt) this.webDataProbeStartedAt = Date.now();
     this.webDataProbeInFlight = true;
+    this.diag("web-data probe start", {
+      elapsed: Date.now() - this.webDataProbeStartedAt,
+    });
     probeUnityWebDataFromCache()
       .then((webData) => {
         if (webData) {
+          this.diag("web-data probe hit", {
+            nodes: webData.nodes.length,
+            unityVersion: webData.unityVersion,
+          });
           this.onUnityWebData(webData);
           return;
         }
+        this.diag("web-data probe miss");
         this.scheduleWebDataProbeRetry();
       })
       .catch((err) => {
@@ -212,14 +238,27 @@ export class Runtime {
     if (this.webDataLoaded) return;
     const page = getPageWindow();
     this.webDataLoaded = true;
+    this.diag("web-data received", {
+      nodes: webData.nodes.map((node) => ({
+        name: node.name,
+        size: node.size,
+        hasData: Boolean(node.data),
+      })),
+      unityVersion: webData.unityVersion,
+    });
     this.logger.debug("Parsed web data into %d node(s)", webData.nodes.length);
     webData.unityVersion
       ? this.logger.info("Running under Unity %s", webData.unityVersion)
       : this.logger.warn("Unable to determine Unity version from web data!");
-    this.readGlobalMetadataFromStorage(webData).catch(() => {
+    this.readGlobalMetadataFromStorage(webData)
+      .then(() => {
+        this.diag("metadata loaded from cache", this.metadata);
+      })
+      .catch(() => {
+        this.diag("metadata cache miss; parsing from web data");
       page.indexedDB.deleteDatabase("UnityWebModkit");
       this.loadGlobalMetadata(webData);
-    });
+      });
   }
 
   private async loadGlobalMetadata(webData: WebData) {
@@ -234,6 +273,12 @@ export class Runtime {
       );
       return;
     }
+    this.diag("metadata parse start", {
+      size: metadataNode.data.byteLength,
+      referencedAssemblies: this.plugins.flatMap(
+        (plugin) => plugin.referencedAssemblies,
+      ),
+    });
     this.allReferencedAssemblies = this.plugins.flatMap(
       (plugin) => plugin.referencedAssemblies,
     );
@@ -247,6 +292,7 @@ export class Runtime {
       return;
     }
     this.globalMetadata = globalMetadata.value;
+    this.diag("metadata parse complete", this.metadata);
     this.saveGlobalMetadata();
   }
 
@@ -491,6 +537,11 @@ export class Runtime {
 
   private hookWasmInstantiate() {
     const page = getPageWindow();
+    this.diag("hook wasm instantiate", {
+      hasInstantiate: typeof page.WebAssembly?.instantiate === "function",
+      hasInstantiateStreaming:
+        typeof page.WebAssembly?.instantiateStreaming === "function",
+    });
     this.instantiateStreaming = page.WebAssembly.instantiateStreaming;
     page.WebAssembly.instantiateStreaming =
       this.onWebAssemblyInstantiateStreaming.bind(this);
@@ -505,14 +556,17 @@ export class Runtime {
     importObject?: WebAssembly.Imports | undefined,
   ): Promise<WebAssembly.WebAssemblyInstantiatedSource> {
     if (!(await this.shouldHandleWasmInstantiate())) {
+      this.diag("instantiateStreaming passthrough");
       return this.instantiateStreaming(source, importObject);
     }
+    this.diag("instantiateStreaming intercepted");
     // Wait for the Il2Cpp metadata to be resolved before continuing
     const metadataReady = await waitFor(() => this.globalMetadata, 15000);
     if (!metadataReady) {
       this.logger.warn(
         "Timed out waiting for global-metadata.dat; continuing without UnityWebModkit patches.",
       );
+      this.diag("instantiateStreaming metadata timeout");
       return this.instantiateStreaming(source, importObject);
     }
     if (this.globalMetadata?.imageDefs.length === 0)
@@ -539,13 +593,24 @@ export class Runtime {
     importObject?: WebAssembly.Imports | undefined,
   ): Promise<WebAssembly.WebAssemblyInstantiatedSource | WebAssembly.Instance> {
     if (!(await this.shouldHandleWasmInstantiate())) {
+      this.diag("instantiate passthrough");
       return this.instantiate(source, importObject);
     }
+    this.diag("instantiate intercepted", {
+      sourceType: source instanceof getPageWindow().WebAssembly.Module
+        ? "module"
+        : ArrayBuffer.isView(source)
+        ? "view"
+        : source instanceof ArrayBuffer
+        ? "arraybuffer"
+        : typeof source,
+    });
     const metadataReady = await waitFor(() => this.globalMetadata, 15000);
     if (!metadataReady) {
       this.logger.warn(
         "Timed out waiting for global-metadata.dat; continuing without UnityWebModkit patches.",
       );
+      this.diag("instantiate metadata timeout");
       return this.instantiate(source, importObject);
     }
     if (this.globalMetadata?.imageDefs.length === 0)
@@ -573,15 +638,25 @@ export class Runtime {
 
   private async shouldHandleWasmInstantiate(): Promise<boolean> {
     const page = getPageWindow();
-    if (this.globalMetadata) return true;
+    if (this.globalMetadata) {
+      this.diag("wasm should-handle: metadata ready");
+      return true;
+    }
     if (page.__UnityWebModkitUnityCandidateSeen) {
       this.startWebDataProbe();
-      return this.waitForGlobalMetadata(15000, 5000);
+      const result = await this.waitForGlobalMetadata(15000, 5000);
+      this.diag("wasm should-handle: candidate seen", { result });
+      return result;
     }
-    if (!this.isLikelyUnityFrame()) return false;
+    if (!this.isLikelyUnityFrame()) {
+      this.diag("wasm should-handle: not likely unity");
+      return false;
+    }
     page.__UnityWebModkitUnityCandidateSeen = true;
     this.startWebDataProbe();
-    return this.waitForGlobalMetadata(15000, 5000);
+    const result = await this.waitForGlobalMetadata(15000, 5000);
+    this.diag("wasm should-handle: likely unity", { result });
+    return result;
   }
 
   private async waitForGlobalMetadata(
@@ -629,12 +704,27 @@ export class Runtime {
     return new Promise<WebAssembly.WebAssemblyInstantiatedSource>(
       async (resolve, reject) => {
         if (!importObject) importObject = {};
+        this.diag("handleBuffer start", {
+          byteLength: bufferSource.byteLength,
+          metadata: this.metadata,
+        });
         await this.readIl2CppContextFromStorage().catch(() => undefined);
+        this.diag("il2cpp context after cache", {
+          hasContext: Boolean(this.il2CppContext),
+          typeAddresses: this.il2CppContext?.typeAddresses?.length || 0,
+        });
         if (!this.il2CppContext) this.searchWasmBinary(bufferSource);
         if (!this.il2CppContext) {
+          this.diag("il2cpp context unavailable");
           reject(new Error("Unable to create or load IL2CPP context"));
           return;
         }
+        this.diag("il2cpp context ready", {
+          referencedAssemblies: this.il2CppContext.referencedAssemblies?.length || 0,
+          typeAddresses: this.il2CppContext.typeAddresses?.length || 0,
+          fieldTypes: Object.keys(this.il2CppContext.fieldData || {}).length,
+          methodTypes: Object.keys(this.il2CppContext.scriptData || {}).length,
+        });
         this.applyImportHooks(importObject);
 
         if (this.shouldUseIndirectOnlyHooks()) {
@@ -681,6 +771,10 @@ export class Runtime {
         this.wasmCacheKey = this.makeWasmCacheKey(bufferSource);
         const cachedIl2CppFunctionCache =
           await this.readIl2CppFunctionCache().catch(() => undefined);
+        this.diag("il2cpp function cache", {
+          hit: Boolean(cachedIl2CppFunctionCache),
+          wasmCacheKey: this.wasmCacheKey,
+        });
         const hasHooks = this.plugins.some((plugin) => plugin.hooks.length > 0);
         const hasBytecodePatches = this.plugins.some(
           (plugin) => plugin.bytecodePatches.length > 0,
@@ -948,7 +1042,9 @@ export class Runtime {
 
   private schedulePluginLoadedCallbacks() {
     const page = getPageWindow();
+    this.diag("schedule onLoaded callbacks", { plugins: this.plugins.length });
     const runCallbacks = () => {
+      this.diag("run onLoaded callbacks", { plugins: this.plugins.length });
       for (const plugin of this.plugins) {
         if (plugin.onLoaded) plugin.onLoaded();
       }
@@ -967,8 +1063,10 @@ export class Runtime {
       typeof page.setTimeout === "function"
         ? page.setTimeout.bind(page)
         : setTimeout;
+    this.diag("schedule onReady callbacks", { plugins: this.plugins.length });
     this.waitForUnityRuntimeReady().then(() => {
       timeout(() => {
+        this.diag("run onReady callbacks", { plugins: this.plugins.length });
         for (const plugin of this.plugins) {
           if (plugin.onReady) plugin.onReady();
         }
@@ -982,9 +1080,17 @@ export class Runtime {
     while (Date.now() - startedAt < 30000) {
       const instance = this.getPageUnityInstanceCandidate();
       const module = instance?.Module;
-      if (module && (module.calledRun || module.asm)) return;
+      if (module && (module.calledRun || module.asm)) {
+        this.diag("unity runtime ready", {
+          elapsed: Date.now() - startedAt,
+          calledRun: Boolean(module.calledRun),
+          hasAsm: Boolean(module.asm),
+        });
+        return;
+      }
       await new Promise((resolve) => page.setTimeout(resolve, 50));
     }
+    this.diag("unity runtime ready timeout");
   }
 
   private getPageUnityInstanceCandidate() {
@@ -2379,6 +2485,14 @@ class ModkitPlugin {
     return this._runtime.metadata;
   }
 
+  public diag(message: string, data?: any) {
+    if (data === undefined) {
+      this.logger.info("[DIAG] %s", message);
+      return;
+    }
+    this.logger.info("[DIAG] %s %o", message, data);
+  }
+
   public hookPrefix(target: HookInfo, callback: PrefixCallback): Hook {
     return this.hook(target, callback, 0);
   }
@@ -2653,6 +2767,7 @@ class ObjectQueryApi {
   }
 
   public resolveType(typeName: string): TypeResolutionTrace {
+    this.plugin.diag("objects.resolveType start", { typeName });
     const metadataTypes = this.plugin.findTypes(typeName);
     const names = this.getTypeNameCandidates(typeName);
     const trace: TypeResolutionTrace = {
@@ -2667,6 +2782,7 @@ class ObjectQueryApi {
     };
     for (const name of names) {
       const namePtr = this.plugin.createMstr(name);
+      this.plugin.diag("objects.resolveType try string", { typeName, name });
       const result = this.tryCallManagedReturnVariants(
         [
           "System.Type$$GetType",
@@ -2680,8 +2796,13 @@ class ObjectQueryApi {
         [[namePtr], [namePtr, 0], [namePtr, 0, 0]],
       );
       trace.stringResults.push({ name, result: result?.val() ?? 0 });
+      this.plugin.diag("objects.resolveType string result", {
+        name,
+        result: result?.val() ?? 0,
+      });
       if (result && result.val() > 0) {
         trace.result = result.val();
+        this.plugin.diag("objects.resolveType success", trace);
         return trace;
       }
     }
@@ -2691,6 +2812,14 @@ class ObjectQueryApi {
       );
       if (!typeAddress) continue;
       for (const attempt of this.getHandleTypeAttempts(typeAddress)) {
+        this.plugin.diag("objects.resolveType try handle", {
+          typeName,
+          typeIndex: metadataType.typeIndex,
+          runtimeTypeIndex: metadataType.runtimeTypeIndex,
+          typeAddress,
+          method: attempt.methods[0],
+          mode: attempt.mode,
+        });
         const result = this.tryCallManagedReturn(
           attempt.methods,
           attempt.args,
@@ -2703,12 +2832,20 @@ class ObjectQueryApi {
           mode: attempt.mode,
           result: result?.val() ?? 0,
         });
+        this.plugin.diag("objects.resolveType handle result", {
+          typeName,
+          method: attempt.methods[0],
+          mode: attempt.mode,
+          result: result?.val() ?? 0,
+        });
         if (result && result.val() > 0) {
           trace.result = result.val();
+          this.plugin.diag("objects.resolveType success", trace);
           return trace;
         }
       }
     }
+    this.plugin.diag("objects.resolveType failed", trace);
     return trace;
   }
 
@@ -2900,8 +3037,12 @@ class ObjectQueryApi {
         this.plugin.call(target, [result, ...args]);
         const ptr = result.readField(0, "u32")?.val() ?? 0;
         if (ptr > 0) return new ValueWrapper(ptr);
-      } catch {
-        // Try the next overload/name variant.
+      } catch (err) {
+        this.plugin.diag("managed return call failed", {
+          target,
+          args: args.map((arg) => (arg instanceof ValueWrapper ? arg.val() : arg)),
+          error: err instanceof Error ? err.message : String(err),
+        });
       } finally {
         result.dispose();
       }

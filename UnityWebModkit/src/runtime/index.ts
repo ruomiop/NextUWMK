@@ -157,6 +157,7 @@ export class Runtime {
       (webData) => this.onUnityWebData(webData),
       () => this.startWebDataProbe(),
     );
+    this.startWebDataProbe();
     if (page.__UnityWebModkitWebData) {
       this.onUnityWebData(page.__UnityWebModkitWebData);
     }

@@ -417,9 +417,6 @@ export function createIl2CppContext(
       }
     }
   }
-  metadata.typeDefs.forEach((def) => delete def.typeIndex);
-  metadata.methodDefs.forEach((def) => delete def.methodIndex);
-  metadata.fieldDefs.forEach((def) => delete def.fieldIndex);
   return ok({
     codeGenModules,
     codeGenModuleMethodPointers,

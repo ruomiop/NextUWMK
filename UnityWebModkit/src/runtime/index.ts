@@ -33,7 +33,8 @@ import { BinaryReader, BinaryWriter } from "../utils/binary";
 import { dataTypeSizes } from "../extras";
 
 const STORAGE_DB_VERSION = 5;
-const IL2CPP_CONTEXT_CACHE_VERSION = 2;
+const METADATA_CACHE_VERSION = 2;
+const IL2CPP_CONTEXT_CACHE_VERSION = 3;
 const IL2CPP_FUNCTION_CACHE_NAME = "il2cpp-functions";
 const WASM_SECTION_EXPORT = 7;
 const WASM_SECTION_TAG = 13;
@@ -208,7 +209,10 @@ export class Runtime {
       const db = request.result;
       db.transaction("storage", "readwrite")
         .objectStore("storage")
-        .put(this.globalMetadata);
+        .put({
+          ...this.globalMetadata,
+          cacheVersion: METADATA_CACHE_VERSION,
+        });
     };
   }
 
@@ -336,7 +340,12 @@ export class Runtime {
               (plugin) => plugin.referencedAssemblies,
             );
             const globalMetadata = metadataRequest.result;
-            if (!globalMetadata || !globalMetadata.originalTypeDefCount) {
+            if (
+              !globalMetadata ||
+              globalMetadata.cacheVersion !== METADATA_CACHE_VERSION ||
+              !globalMetadata.originalTypeDefCount ||
+              !this.hasMetadataRuntimeIndexes(globalMetadata)
+            ) {
               reject();
               return;
             }
@@ -407,6 +416,17 @@ export class Runtime {
   private hasUsableFieldData(fieldData: Il2CppContext["fieldData"]) {
     return Object.values(fieldData).some((fields) =>
       Object.values(fields).some((field) => field.offset >= 0),
+    );
+  }
+
+  private hasMetadataRuntimeIndexes(metadata: Il2CppMetadata) {
+    return (
+      Array.isArray(metadata.typeDefs) &&
+      Array.isArray(metadata.methodDefs) &&
+      Array.isArray(metadata.fieldDefs) &&
+      metadata.typeDefs.some((def) => def.typeIndex !== undefined) &&
+      metadata.methodDefs.some((def) => def.methodIndex !== undefined) &&
+      metadata.fieldDefs.some((def) => def.fieldIndex !== undefined)
     );
   }
 

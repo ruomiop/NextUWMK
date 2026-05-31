@@ -14,6 +14,7 @@ Compared with the original UnityWebModkit base, this version adds or updates:
   - IL2CPP helper resolver cache now stores the managed string input encoding.
   - Runtime helper lookup now falls back to raw `WebAssembly.Instance.exports` when a Unity loader does not mirror patched exports onto `Module.asm`.
   - Runtime allocator lookup now prefers raw wasm exports before Unity loader wrappers, avoiding broken `_malloc` / `_free` wrappers on loaders that do not mirror patched exports onto `Module.asm`.
+  - Plugin `onLoaded` callbacks now run after the patched wasm instance is returned to the Unity loader, so managed runtime helpers are not called before Unity receives the instance.
 - Runtime Unity WebGL candidate detection before wasm interception.
 - Unity WebGL data probing and metadata loading fallback from browser cache/runtime data.
 - IndexedDB cache versioning for parsed metadata and IL2CPP function mappings.

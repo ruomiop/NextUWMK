@@ -585,10 +585,10 @@ export class Runtime {
                   );
                 }
               }
-              if (plugin.onLoaded) plugin.onLoaded();
             }
             this.logger.message("Chainloader startup complete");
             resolve(source);
+            this.schedulePluginLoadedCallbacks();
           }, reject);
           return;
         }
@@ -679,10 +679,10 @@ export class Runtime {
                     );
                   }
                 }
-                if (plugin.onLoaded) plugin.onLoaded();
               }
               this.logger.message("Chainloader startup complete");
               resolve(source);
+              this.schedulePluginLoadedCallbacks();
             },
             reject,
           );
@@ -853,15 +853,27 @@ export class Runtime {
                 );
               }
             });
-            for (const plugin of this.plugins) {
-              if (plugin.onLoaded) plugin.onLoaded();
-            }
             this.logger.message("Chainloader startup complete");
             resolve(instantiatedSource);
+            this.schedulePluginLoadedCallbacks();
           },
         );
       },
     );
+  }
+
+  private schedulePluginLoadedCallbacks() {
+    const page = getPageWindow();
+    const runCallbacks = () => {
+      for (const plugin of this.plugins) {
+        if (plugin.onLoaded) plugin.onLoaded();
+      }
+    };
+    const timeout =
+      typeof page.setTimeout === "function"
+        ? page.setTimeout.bind(page)
+        : setTimeout;
+    timeout(runCallbacks, 0);
   }
 
   private applyBytecodePatches(wail: WailParser, plugin: ModkitPlugin) {

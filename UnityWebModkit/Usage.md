@@ -18,6 +18,7 @@ const plugin = UWM.Runtime.createPlugin({
   version: "0.1.0",
   referencedAssemblies: ["Assembly-CSharp.dll", "UnityEngine.CoreModule.dll"],
   preferIndirectHooks: false,
+  globalName: "ctx",
 });
 ```
 
@@ -27,6 +28,13 @@ Options:
 - `version`: optional plugin version.
 - `referencedAssemblies`: IL2CPP assemblies to parse. Add every assembly that contains classes or Unity APIs you want to call/hook.
 - `preferIndirectHooks`: when true, hooks are applied through indirect table wiring only.
+- `globalName`: optional page-global name, or array of names, used to expose the plugin for DevTools access. For example `globalName: "ctx"` exposes `window.ctx`.
+
+The most recently created plugin is also available as:
+
+```js
+UWM.Runtime.lastPlugin;
+```
 
 `plugin.onLoaded` runs after metadata and method mappings are ready:
 
@@ -235,6 +243,67 @@ plugin.registerFieldOffsets({
     health: 0x28,
   },
 });
+```
+
+## Object And Transform Query
+
+`plugin.objects` provides Unity runtime object helpers for exploratory scripts.
+It is designed for cases where SDK metadata gives class/method names, but the live scene/prefab hierarchy must be discovered at runtime.
+
+Find live objects/components by type:
+
+```js
+const players = plugin.objects.findByType("PlayerController");
+const transforms = plugin.objects.findComponents("UnityEngine.Transform");
+const cameras = plugin.objects.findByType("UnityEngine.Camera");
+```
+
+Read common Unity object relations:
+
+```js
+const player = players[0];
+const go = plugin.objects.gameObject(player);
+const t = plugin.objects.transform(player);
+const name = plugin.objects.name(player);
+const renderer = plugin.objects.getComponent(player, "UnityEngine.Renderer");
+```
+
+Inspect Transform children:
+
+```js
+const count = plugin.objects.childCount(t);
+const firstChild = plugin.objects.child(t, 0);
+const children = plugin.objects.children(t);
+```
+
+Dump a Transform tree:
+
+```js
+const tree = plugin.objects.dumpTree(t, {
+  depth: 4,
+  includePosition: true,
+});
+console.log(tree);
+```
+
+`dumpTree()` returns:
+
+```js
+{
+  ptr: 0x123456,
+  name: "Player",
+  position: { x: 1, y: 2, z: 3 },
+  children: [
+    { ptr: 0x234567, name: "Rig1", children: [] },
+  ],
+}
+```
+
+Position helpers use Unity injected APIs:
+
+```js
+plugin.objects.position(t);
+plugin.objects.localPosition(t);
 ```
 
 ## Metadata

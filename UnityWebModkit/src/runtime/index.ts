@@ -2143,6 +2143,7 @@ class ModkitPlugin {
   private _importHooks: ImportHook[] = [];
   private _bytecodePatches: BytecodePatch[] = [];
   private _runtime: Runtime;
+  public readonly objects: ObjectQueryApi;
 
   constructor(
     name: string,
@@ -2157,6 +2158,7 @@ class ModkitPlugin {
     this.preferIndirectHooks = preferIndirectHooks === true;
     this._referencedAssemblies = referencedAssemblies || [];
     this._runtime = runtime;
+    this.objects = new ObjectQueryApi(this);
   }
 
   public get hooks() {
@@ -2275,8 +2277,12 @@ class ModkitPlugin {
     return hook;
   }
 
-  public call(target: string, args: any[]): void;
-  public call(targetClass: string, targetMethod: string, args: any[]): void;
+  public call(target: string, args: any[]): ValueWrapper;
+  public call(
+    targetClass: string,
+    targetMethod: string,
+    args: any[],
+  ): ValueWrapper;
   public call(
     target: string,
     targetMethodOrArgs?: string | any[],
@@ -2379,6 +2385,246 @@ class ModkitPlugin {
       this.slice(src, count),
       dest instanceof ValueWrapper ? dest.val() : dest,
     );
+  }
+}
+
+type ObjectTreeDumpOptions = {
+  depth?: number;
+  includePosition?: boolean;
+};
+
+type ObjectTreeNode = {
+  ptr: number;
+  name: string | null;
+  position?: { x: number; y: number; z: number };
+  children: ObjectTreeNode[];
+};
+
+class ObjectQueryApi {
+  private readonly plugin: ModkitPlugin;
+  private typeCache = new Map<string, ValueWrapper>();
+
+  constructor(plugin: ModkitPlugin) {
+    this.plugin = plugin;
+  }
+
+  public getType(typeName: string): ValueWrapper | undefined {
+    const cached = this.typeCache.get(typeName);
+    if (cached) return cached;
+
+    const names = this.getTypeNameCandidates(typeName);
+    for (const name of names) {
+      const result = this.tryCall(
+        ["System.Type$$GetType", "System.Type$$GetType_854"],
+        [this.plugin.createMstr(name), 0],
+      );
+      if (result && result.val() > 0) {
+        this.typeCache.set(typeName, result);
+        return result;
+      }
+    }
+    return undefined;
+  }
+
+  public findByType(typeName: string): ValueWrapper[] {
+    const type = this.getType(typeName);
+    if (!type) return [];
+    const array = this.tryCall(
+      [
+        "UnityEngine.Object$$FindObjectsOfType_0",
+        "UnityEngine.Object$$FindObjectsOfType_12890",
+        "UnityEngine.Object$$FindObjectsOfType",
+      ],
+      [type, 0],
+    );
+    return array ? this.readObjectArray(array) : [];
+  }
+
+  public findComponents(typeName: string): ValueWrapper[] {
+    return this.findByType(typeName);
+  }
+
+  public findGameObjectsByName(name: string): ValueWrapper[] {
+    const all = this.findByType("UnityEngine.GameObject");
+    return all.filter((obj) => this.name(obj) === name);
+  }
+
+  public name(object: ValueWrapper | number): string | null {
+    const result = this.tryCall(["UnityEngine.Object$$get_name"], [
+      object,
+      0,
+    ]);
+    if (!result || result.val() <= 0) return null;
+    try {
+      return result.mstr();
+    } catch {
+      return null;
+    }
+  }
+
+  public transform(object: ValueWrapper | number): ValueWrapper | undefined {
+    return this.tryCall(
+      [
+        "UnityEngine.GameObject$$get_transform",
+        "UnityEngine.Component$$get_transform",
+      ],
+      [object, 0],
+    );
+  }
+
+  public gameObject(component: ValueWrapper | number): ValueWrapper | undefined {
+    return this.tryCall(
+      [
+        "UnityEngine.Component$$get_gameObject",
+        "UnityEngine.GameObject$$get_gameObject",
+      ],
+      [component, 0],
+    );
+  }
+
+  public getComponent(
+    object: ValueWrapper | number,
+    typeName: string,
+  ): ValueWrapper | undefined {
+    const type = this.getType(typeName);
+    if (!type) return undefined;
+    const gameObject = this.gameObject(object) || new ValueWrapper(this.ptr(object));
+    return this.tryCall(
+      [
+        "UnityEngine.GameObject$$GetComponent_0",
+        "UnityEngine.GameObject$$GetComponent_6135",
+        "UnityEngine.Component$$GetComponent_0",
+        "UnityEngine.Component$$GetComponent_6132",
+      ],
+      [gameObject, type, 0],
+    );
+  }
+
+  public childCount(transform: ValueWrapper | number): number {
+    return (
+      this.tryCall(["UnityEngine.Transform$$get_childCount"], [
+        transform,
+        0,
+      ])?.val() ?? 0
+    );
+  }
+
+  public child(
+    transform: ValueWrapper | number,
+    index: number,
+  ): ValueWrapper | undefined {
+    return this.tryCall(["UnityEngine.Transform$$GetChild"], [
+      transform,
+      index,
+      0,
+    ]);
+  }
+
+  public children(transform: ValueWrapper | number): ValueWrapper[] {
+    const count = this.childCount(transform);
+    const result: ValueWrapper[] = [];
+    for (let i = 0; i < count; i++) {
+      const child = this.child(transform, i);
+      if (child && child.val() > 0) result.push(child);
+    }
+    return result;
+  }
+
+  public position(transform: ValueWrapper | number) {
+    return this.readVector3Injected(
+      "UnityEngine.Transform$$get_position_Injected",
+      transform,
+    );
+  }
+
+  public localPosition(transform: ValueWrapper | number) {
+    return this.readVector3Injected(
+      "UnityEngine.Transform$$get_localPosition_Injected",
+      transform,
+    );
+  }
+
+  public dumpTree(
+    transform: ValueWrapper | number,
+    options: ObjectTreeDumpOptions = {},
+  ): ObjectTreeNode {
+    const maxDepth = options.depth ?? 4;
+    const visit = (node: ValueWrapper, depth: number): ObjectTreeNode => {
+      const dumped: ObjectTreeNode = {
+        ptr: node.val(),
+        name: this.name(node),
+        children: [],
+      };
+      if (options.includePosition) dumped.position = this.position(node);
+      if (depth >= maxDepth) return dumped;
+      dumped.children = this.children(node).map((child) =>
+        visit(child, depth + 1),
+      );
+      return dumped;
+    };
+    return visit(new ValueWrapper(this.ptr(transform)), 0);
+  }
+
+  private tryCall(targets: string[], args: any[]): ValueWrapper | undefined {
+    for (const target of targets) {
+      try {
+        const result = this.plugin.call(target, args);
+        if (result && result.val() > 0) return result;
+      } catch {
+        // Try the next overload/name variant.
+      }
+    }
+    return undefined;
+  }
+
+  private readObjectArray(array: ValueWrapper): ValueWrapper[] {
+    const ptr = array.val();
+    if (ptr <= 0) return [];
+    const length = new ValueWrapper(ptr + 12).readField(0, "u32")?.val() ?? 0;
+    if (length <= 0 || length > 0x100000) return [];
+    const objects: ValueWrapper[] = [];
+    for (let i = 0; i < length; i++) {
+      const item = new ValueWrapper(ptr + 16 + i * 4)
+        .readField(0, "u32")
+        ?.val();
+      if (item && item > 0) objects.push(new ValueWrapper(item));
+    }
+    return objects;
+  }
+
+  private readVector3Injected(
+    method: string,
+    transform: ValueWrapper | number,
+  ) {
+    const block = this.plugin.alloc(12);
+    try {
+      this.tryCall([method], [transform, block, 0]);
+      return {
+        x: block.readField(0, "f32")?.val() ?? 0,
+        y: block.readField(4, "f32")?.val() ?? 0,
+        z: block.readField(8, "f32")?.val() ?? 0,
+      };
+    } finally {
+      block.dispose();
+    }
+  }
+
+  private getTypeNameCandidates(typeName: string) {
+    if (typeName.includes(",")) return [typeName];
+    const shortName = typeName.startsWith("UnityEngine.")
+      ? typeName
+      : `UnityEngine.${typeName}`;
+    return [
+      typeName,
+      `${typeName}, Assembly-CSharp`,
+      `${typeName}, mscorlib`,
+      `${typeName}, UnityEngine.CoreModule`,
+      `${shortName}, UnityEngine.CoreModule`,
+    ];
+  }
+
+  private ptr(value: ValueWrapper | number) {
+    return value instanceof ValueWrapper ? value.val() : value;
   }
 }
 

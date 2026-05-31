@@ -17,6 +17,7 @@ This repository contains the 0.1 release: TypeScript source and a prebuilt `dist
 - Adds runtime metadata inspection through `plugin.metadata`.
 - Adds field inspection helpers such as `plugin.listFields()` and `plugin.findFields()`.
 - Adds field offset override support through `plugin.registerFieldOffsets()`.
+- Adds runtime object/component/Transform query helpers through `plugin.objects`, including Transform tree dumps.
 - Provides managed heap helpers for `malloc`, scoped `alloc`, `free`, `memcpy`, and managed string creation.
 - Exposes field discovery and field offset overrides for games with missing or unusual field-offset data.
 
@@ -28,6 +29,12 @@ The 0.1 release documents and exposes several APIs that are especially useful wh
 - `plugin.listFields(targetClass?)`
 - `plugin.findFields(pattern)`
 - `plugin.registerFieldOffsets(offsets)`
+- `plugin.objects.findByType(typeName)`
+- `plugin.objects.findComponents(typeName)`
+- `plugin.objects.name(object)`
+- `plugin.objects.transform(object)`
+- `plugin.objects.children(transform)`
+- `plugin.objects.dumpTree(transform, options?)`
 - `ValueWrapper.readFieldByName(typeName, fieldName, dataType)`
 - `ValueWrapper.writeFieldByName(typeName, fieldName, dataType, value)`
 - `ClassWrapper.readFieldByName(fieldName, dataType)`

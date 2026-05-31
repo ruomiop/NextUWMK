@@ -3120,6 +3120,7 @@ class ObjectQueryApi {
           typeName,
           type: type.val(),
           object: single.val(),
+          ...this.describeObjectForDiag(single),
         });
         return [single];
       }
@@ -3376,13 +3377,6 @@ class ObjectQueryApi {
         typeName,
       );
       if (direct) return direct;
-      const managed = this.tryCallManagedReturnWithDiag(
-        targets,
-        args,
-        "objects.findByType managed",
-        typeName,
-      );
-      if (managed) return managed;
     }
     return undefined;
   }
@@ -3422,23 +3416,18 @@ class ObjectQueryApi {
       .findMethods("FindObjects")
       .filter(
         (method) =>
-          method.typeName === "UnityEngine.Object" ||
-          method.typeName === "UnityEngine.Resources" ||
-          method.typeName.endsWith(".Object") ||
-          method.typeName.endsWith(".Resources"),
+          method.tableIndex > 0 &&
+          (method.typeName === "UnityEngine.Object" ||
+            method.typeName === "UnityEngine.Resources" ||
+            method.typeName.endsWith(".Object") ||
+            method.typeName.endsWith(".Resources")),
       )
       .sort((a, b) => this.rankFindObjectsMethod(a.name) - this.rankFindObjectsMethod(b.name));
     this.plugin.diag("objects.findByType method metadata", dynamicMethods);
     const dynamicTargets = dynamicMethods
       .map((method) => `${method.typeName}$$${method.name}`);
 
-    const fallbackTargets = [
-      "UnityEngine.Resources$$FindObjectsOfTypeAll",
-      "UnityEngine.Resources$$FindObjectsOfTypeAll_0",
-      "UnityEngine.Object$$FindObjectsOfType",
-      "UnityEngine.Object$$FindObjectsOfType_0",
-      "UnityEngine.Object$$FindObjectsOfType_12890",
-    ];
+    const fallbackTargets = ["UnityEngine.Object$$FindObjectsOfType_12890"];
 
     return [...new Set([...dynamicTargets, ...fallbackTargets])];
   }
@@ -3455,6 +3444,7 @@ class ObjectQueryApi {
       .findMethods("FindObject")
       .filter(
         (method) =>
+          method.tableIndex > 0 &&
           (method.typeName === "UnityEngine.Object" ||
             method.typeName.endsWith(".Object")) &&
           method.name.startsWith("FindObject") &&
@@ -3466,10 +3456,7 @@ class ObjectQueryApi {
     const dynamicTargets = dynamicMethods
       .map((method) => `${method.typeName}$$${method.name}`);
 
-    const fallbackTargets = [
-      "UnityEngine.Object$$FindObjectOfType",
-      "UnityEngine.Object$$FindObjectOfType_0",
-    ];
+    const fallbackTargets = ["UnityEngine.Object$$FindObjectOfType_12892"];
 
     return [...new Set([...dynamicTargets, ...fallbackTargets])];
   }
@@ -3479,6 +3466,31 @@ class ObjectQueryApi {
     if (name.startsWith("FindFirstObjectByType")) return 1;
     if (name.startsWith("FindAnyObjectByType")) return 2;
     return 10;
+  }
+
+  private describeObjectForDiag(object: ValueWrapper) {
+    const gameObject = this.gameObject(object);
+    const transform = this.transform(object);
+    return {
+      className: this.safeDiagValue(() => object.getClassName()),
+      name: this.safeDiagValue(() => this.name(object)),
+      gameObject: gameObject?.val() ?? 0,
+      gameObjectName: gameObject
+        ? this.safeDiagValue(() => this.name(gameObject))
+        : null,
+      transform: transform?.val() ?? 0,
+      transformName: transform
+        ? this.safeDiagValue(() => this.name(transform))
+        : null,
+    };
+  }
+
+  private safeDiagValue<T>(read: () => T): T | null {
+    try {
+      return read();
+    } catch {
+      return null;
+    }
   }
 
   private typeString(targets: string[], type: ValueWrapper | number): string | null {

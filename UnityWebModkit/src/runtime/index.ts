@@ -2959,6 +2959,7 @@ type TypeResolutionTrace = {
 class ObjectQueryApi {
   private readonly plugin: ModkitPlugin;
   private typeCache = new Map<string, ValueWrapper>();
+  private typeTraceCache = new Map<string, TypeResolutionTrace>();
 
   constructor(plugin: ModkitPlugin) {
     this.plugin = plugin;
@@ -2972,6 +2973,7 @@ class ObjectQueryApi {
     if (!trace.result) return undefined;
     const result = new ValueWrapper(trace.result);
     this.typeCache.set(typeName, result);
+    this.typeTraceCache.set(typeName, trace);
     return result;
   }
 
@@ -3106,11 +3108,12 @@ class ObjectQueryApi {
   public findByType(typeName: string): ValueWrapper[] {
     const type = this.getType(typeName);
     if (!type) return [];
+    const trace = this.typeTraceCache.get(typeName);
     this.plugin.diag("objects.findByType start", {
       typeName,
       type: type.val(),
-      resolvedTypeName: this.runtimeTypeName(type),
-      resolvedTypeFullName: this.runtimeTypeFullName(type),
+      metadataTypes: trace?.metadataTypes ?? [],
+      handleResults: trace?.handleResults ?? [],
     });
     const array = this.tryFindObjectsArray(typeName, type);
     if (!array) {
@@ -3120,7 +3123,6 @@ class ObjectQueryApi {
           typeName,
           type: type.val(),
           object: single.val(),
-          ...this.describeObjectForDiag(single),
         });
         return [single];
       }
@@ -3466,31 +3468,6 @@ class ObjectQueryApi {
     if (name.startsWith("FindFirstObjectByType")) return 1;
     if (name.startsWith("FindAnyObjectByType")) return 2;
     return 10;
-  }
-
-  private describeObjectForDiag(object: ValueWrapper) {
-    const gameObject = this.gameObject(object);
-    const transform = this.transform(object);
-    return {
-      className: this.safeDiagValue(() => object.getClassName()),
-      name: this.safeDiagValue(() => this.name(object)),
-      gameObject: gameObject?.val() ?? 0,
-      gameObjectName: gameObject
-        ? this.safeDiagValue(() => this.name(gameObject))
-        : null,
-      transform: transform?.val() ?? 0,
-      transformName: transform
-        ? this.safeDiagValue(() => this.name(transform))
-        : null,
-    };
-  }
-
-  private safeDiagValue<T>(read: () => T): T | null {
-    try {
-      return read();
-    } catch {
-      return null;
-    }
   }
 
   private typeString(targets: string[], type: ValueWrapper | number): string | null {

@@ -34,7 +34,7 @@ import { dataTypeSizes } from "../extras";
 
 const STORAGE_DB_VERSION = 5;
 const METADATA_CACHE_VERSION = 2;
-const IL2CPP_CONTEXT_CACHE_VERSION = 4;
+const IL2CPP_CONTEXT_CACHE_VERSION = 5;
 const IL2CPP_FUNCTION_CACHE_NAME = "il2cpp-functions";
 const WASM_SECTION_EXPORT = 7;
 const WASM_SECTION_TAG = 13;
@@ -2086,6 +2086,7 @@ export class Runtime {
       assemblyName: string;
       imageName: string;
       typeIndex?: number;
+      runtimeTypeIndex?: number;
     }> = [];
 
     for (const imageDef of this.globalMetadata.imageDefs) {
@@ -2122,7 +2123,13 @@ export class Runtime {
           shortName.toLowerCase() === needle ||
           `${typeName}, ${assemblyName}`.toLowerCase().includes(needle)
         ) {
-          results.push({ typeName, assemblyName, imageName, typeIndex });
+          results.push({
+            typeName,
+            assemblyName,
+            imageName,
+            typeIndex,
+            runtimeTypeIndex: typeDef.byvalTypeIndex,
+          });
         }
       }
     }
@@ -2149,7 +2156,10 @@ export class Runtime {
 
   public getRuntimeTypeAddress(typeIndex: number | undefined) {
     if (typeIndex === undefined || typeIndex < 0) return undefined;
-    const address = this.il2CppContext?.typeAddresses?.[typeIndex];
+    const runtimeTypeIndex =
+      this.globalMetadata?.typeDefs.find((typeDef) => typeDef.typeIndex === typeIndex)
+        ?.byvalTypeIndex ?? typeIndex;
+    const address = this.il2CppContext?.typeAddresses?.[runtimeTypeIndex];
     return address && address > 0 ? address : undefined;
   }
 
@@ -2608,11 +2618,13 @@ type TypeResolutionTrace = {
     assemblyName: string;
     imageName: string;
     typeIndex?: number;
+    runtimeTypeIndex?: number;
     typeAddress?: number;
   }>;
   stringResults: Array<{ name: string; result: number }>;
   handleResults: Array<{
     typeIndex?: number;
+    runtimeTypeIndex?: number;
     typeAddress?: number;
     result: number;
   }>;
@@ -2682,6 +2694,7 @@ class ObjectQueryApi {
       );
       trace.handleResults.push({
         typeIndex: metadataType.typeIndex,
+        runtimeTypeIndex: metadataType.runtimeTypeIndex,
         typeAddress,
         result: result?.val() ?? 0,
       });

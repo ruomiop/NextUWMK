@@ -304,26 +304,21 @@ export function createIl2CppContext(
   }
   const scriptData: Il2CppScriptData = {};
   const fieldData: Il2CppFieldData = {};
-  let activeMetadataRegistration = metadataRegistration;
-  let fieldOffsets = metadataRegistration
-    ? readFieldOffsets(memoryReader, metadataRegistration, metadata.version)
+  const fallbackMetadataRegistration = findMetadataRegistration(
+    memoryReader,
+    metadata,
+  );
+  let activeMetadataRegistration =
+    fallbackMetadataRegistration || metadataRegistration;
+  let fieldOffsets = activeMetadataRegistration
+    ? readFieldOffsets(memoryReader, activeMetadataRegistration, metadata.version)
     : [];
-  if (!hasUsableFieldOffsets(fieldOffsets, metadata.typeDefs)) {
-    const fallbackMetadataRegistration = findMetadataRegistration(
-      memoryReader,
-      metadata,
-    );
-    if (
-      fallbackMetadataRegistration &&
-      fallbackMetadataRegistration !== metadataRegistration
-    ) {
-      activeMetadataRegistration = fallbackMetadataRegistration;
-      fieldOffsets = readFieldOffsets(
-        memoryReader,
-        fallbackMetadataRegistration,
-        metadata.version,
-      );
-    }
+  if (
+    !fallbackMetadataRegistration &&
+    metadataRegistration &&
+    !hasUsableFieldOffsets(fieldOffsets, metadata.typeDefs)
+  ) {
+    activeMetadataRegistration = metadataRegistration;
   }
   const computedFieldOffsets = computeManagedFieldOffsets(
     memoryReader,

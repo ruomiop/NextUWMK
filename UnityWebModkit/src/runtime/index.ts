@@ -66,6 +66,8 @@ export class Runtime {
   private fieldOffsetOverrides: Record<string, Record<string, number>> = {};
   private webDataLoaded = false;
   private webDataProbeStarted = false;
+  private webDataProbeInFlight = false;
+  private webDataProbeStartedAt = 0;
   private instantiateStreaming: any;
   private instantiate: any;
   private internalMappings: any;
@@ -164,15 +166,33 @@ export class Runtime {
   }
 
   private startWebDataProbe() {
-    if (this.webDataProbeStarted || this.webDataLoaded) return;
+    if (this.webDataLoaded || this.webDataProbeInFlight) return;
     this.webDataProbeStarted = true;
+    if (!this.webDataProbeStartedAt) this.webDataProbeStartedAt = Date.now();
+    this.webDataProbeInFlight = true;
     probeUnityWebDataFromCache()
       .then((webData) => {
-        if (webData) this.onUnityWebData(webData);
+        if (webData) {
+          this.onUnityWebData(webData);
+          return;
+        }
+        this.scheduleWebDataProbeRetry();
       })
-      .catch((err) =>
-        this.logger.warn("Unable to probe Unity web data cache: %o", err),
-      );
+      .catch((err) => {
+        this.logger.warn("Unable to probe Unity web data cache: %o", err);
+        this.scheduleWebDataProbeRetry();
+      })
+      .finally(() => {
+        this.webDataProbeInFlight = false;
+      });
+  }
+
+  private scheduleWebDataProbeRetry() {
+    if (this.webDataLoaded) return;
+    const page = getPageWindow();
+    const elapsed = Date.now() - this.webDataProbeStartedAt;
+    if (elapsed > 30000) return;
+    page.setTimeout(() => this.startWebDataProbe(), elapsed < 5000 ? 100 : 500);
   }
 
   private onUnityWebData(webData: WebData) {

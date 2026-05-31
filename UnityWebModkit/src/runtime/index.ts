@@ -76,6 +76,7 @@ export class Runtime {
   private internalWasmFunctions: any;
   private internalWasmCode: any;
   private wasmExports: any;
+  private wasmTable?: WebAssembly.Table;
   private wasmModule: any;
   private wasmMemory?: WebAssembly.Memory;
   private wasmCacheKey = "";
@@ -1851,7 +1852,7 @@ export class Runtime {
 
   public resolveTableName(asm: any) {
     return (
-      Object.keys(asm).find((key) => asm[key].constructor.name == "Table") ||
+      Object.keys(asm).find((key) => this.isWasmTable(asm[key])) ||
       "Unknown"
     );
   }
@@ -1864,21 +1865,52 @@ export class Runtime {
       page?.Module?.asm,
     ].filter(Boolean);
 
+    if (this.wasmTable) return this.wasmTable;
+
     for (const asm of asmCandidates) {
       const preferred = this.tableName ? asm[this.tableName] : undefined;
-      if (preferred && typeof preferred.get === "function") return preferred;
+      if (this.isWasmTable(preferred)) return preferred;
 
       const tableName = Object.keys(asm).find(
-        (key) => asm[key]?.constructor?.name === "Table",
+        (key) => this.isWasmTable(asm[key]),
       );
       if (!tableName) continue;
       const table = asm[tableName];
-      if (table && typeof table.get === "function") {
+      if (this.isWasmTable(table)) {
         this.tableName = tableName;
+        this.wasmTable = table;
         return table;
       }
     }
 
+    return undefined;
+  }
+
+  private isWasmTable(value: any): value is WebAssembly.Table {
+    return (
+      value &&
+      typeof value.get === "function" &&
+      typeof value.set === "function" &&
+      typeof value.grow === "function" &&
+      typeof value.length === "number"
+    );
+  }
+
+  private findWasmTable(value: any, depth = 0): WebAssembly.Table | undefined {
+    if (!value || depth > 2) return undefined;
+    if (this.isWasmTable(value)) return value;
+    if (typeof value !== "object" && typeof value !== "function") {
+      return undefined;
+    }
+    for (const key of Object.keys(value)) {
+      const child = value[key];
+      if (this.isWasmTable(child)) {
+        this.tableName = key;
+        return child;
+      }
+      const nested = this.findWasmTable(child, depth + 1);
+      if (nested) return nested;
+    }
     return undefined;
   }
 
@@ -1896,6 +1928,16 @@ export class Runtime {
     importObject?: WebAssembly.Imports,
   ) {
     this.wasmExports = (source as any)?.instance?.exports;
+    this.wasmTable =
+      this.findWasmTable(this.wasmExports) ||
+      this.findWasmTable(importObject) ||
+      this.wasmTable;
+    this.diag("wasm exports remembered", {
+      exportKeys: Object.keys(this.wasmExports || {}).length,
+      hasTable: Boolean(this.wasmTable),
+      tableLength: this.wasmTable?.length || 0,
+      tableName: this.tableName,
+    });
     this.wasmMemory =
       this.wasmMemory ||
       ((importObject as any)?.env?.memory as WebAssembly.Memory | undefined);

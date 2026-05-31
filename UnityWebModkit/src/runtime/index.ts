@@ -2866,7 +2866,7 @@ class ObjectQueryApi {
     for (const name of names) {
       const namePtr = this.plugin.createMstr(name);
       this.plugin.diag("objects.resolveType try string", { typeName, name });
-      const result = this.tryCallManagedReturnVariants(
+      const result = this.tryCallReturnVariants(
         [
           "System.Type$$GetType",
           "System.Type$$GetType_317",
@@ -2934,6 +2934,26 @@ class ObjectQueryApi {
 
   private getHandleTypeAttempts(typeAddress: number) {
     return [
+      {
+        methods: ["System.Type$$GetTypeFromHandle"],
+        args: [typeAddress],
+        mode: "direct",
+      },
+      {
+        methods: ["System.Type$$internal_from_handle"],
+        args: [typeAddress],
+        mode: "direct",
+      },
+      {
+        methods: ["System.Type$$GetTypeFromHandle"],
+        args: [typeAddress, 0],
+        mode: "direct-extra",
+      },
+      {
+        methods: ["System.Type$$internal_from_handle"],
+        args: [typeAddress, 0],
+        mode: "direct-extra",
+      },
       {
         methods: ["System.Type$$GetTypeFromHandle"],
         args: [typeAddress, 0],
@@ -3109,6 +3129,15 @@ class ObjectQueryApi {
     return undefined;
   }
 
+  private tryCallReturn(
+    targets: string[],
+    args: any[],
+  ): ValueWrapper | undefined {
+    const direct = this.tryCall(targets, args);
+    if (direct) return direct;
+    return this.tryCallManagedReturn(targets, args);
+  }
+
   private tryCallManagedReturn(
     targets: string[],
     args: any[],
@@ -3139,6 +3168,17 @@ class ObjectQueryApi {
   ): ValueWrapper | undefined {
     for (const args of argVariants) {
       const result = this.tryCall(targets, args);
+      if (result) return result;
+    }
+    return undefined;
+  }
+
+  private tryCallReturnVariants(
+    targets: string[],
+    argVariants: any[][],
+  ): ValueWrapper | undefined {
+    for (const args of argVariants) {
+      const result = this.tryCallReturn(targets, args);
       if (result) return result;
     }
     return undefined;

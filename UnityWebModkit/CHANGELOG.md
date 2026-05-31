@@ -37,6 +37,7 @@ Compared with the original UnityWebModkit base, this version adds or updates:
 - Object query metadata-handle lookup now uses the scanned global metadata registration and maps type definitions through `byvalTypeIndex`, fixing Unity/game type resolution when module-local registration data is incomplete.
 - Object query type tracing now calls managed `System.Type` helpers through their IL2CPP out-pointer return ABI, fixing lookups for methods that compile to void wasm functions with an explicit return slot.
 - Added visible `[DIAG]` logs for Unity web data capture, metadata/cache loading, wasm interception, IL2CPP context/function cache loading, plugin callback scheduling, and object type resolution attempts.
+- Unity candidate handling now waits for the full metadata timeout instead of passing wasm through after an early web-data miss, and XHR/cache probes emit visible diagnostics for empty `304` responses and IndexedDB reprobes.
 - Runtime calls can now use a remembered wasm module fallback before Unity exposes `unityInstance`, allowing early `onLoaded` object queries to allocate/call safely.
 - Unity web data cache probing now retries briefly during startup to avoid races where UnityCache is populated just after UWMK's first probe.
 - Metadata cache entries now carry a schema version and preserve runtime indices used by IL2CPP context reconstruction.

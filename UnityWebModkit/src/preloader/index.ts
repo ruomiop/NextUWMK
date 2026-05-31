@@ -85,6 +85,7 @@ async function getIndexedDbNames(fallbackNames: string[] = []) {
           (name: string | undefined): name is string =>
             !!name && name.includes("UnityCache"),
         );
+      logger.info("[DIAG] indexedDB Unity cache candidates %o", names);
       if (names.length > 0) return names;
     } catch (err) {
       logger.debug("Unable to enumerate indexedDB databases: %o", err);
@@ -98,11 +99,19 @@ function loadWebDataFromIndexedDb(
 ): Promise<WebData | undefined> {
   const page = getPageWindow();
   return new Promise<WebData | undefined>((resolve) => {
+    logger.info("[DIAG] probing Unity web data indexedDB %s", databaseName);
     const request = page.indexedDB.open(databaseName);
-    request.onerror = () => resolve(undefined);
+    request.onerror = () => {
+      logger.info("[DIAG] indexedDB open failed %s", databaseName);
+      resolve(undefined);
+    };
     request.onsuccess = (event: any) => {
       const db = event.target.result;
       const objectStores = Array.from(db.objectStoreNames as any) as string[];
+      logger.info("[DIAG] indexedDB stores %o", {
+        databaseName,
+        objectStores,
+      });
       const storesToProbe = objectStores.includes("RequestStore")
         ? ["RequestStore"]
         : objectStores.filter((name) =>
@@ -110,6 +119,7 @@ function loadWebDataFromIndexedDb(
           );
 
       if (storesToProbe.length === 0) {
+        logger.info("[DIAG] indexedDB no probe stores %s", databaseName);
         db.close();
         resolve(undefined);
         return;
@@ -137,8 +147,18 @@ function loadWebDataFromIndexedDb(
         }
         requestCacheEntries.onsuccess = async (event: any) => {
           const entries = event.target.result;
+          logger.info("[DIAG] indexedDB store entries %o", {
+            databaseName,
+            storeName,
+            count: entries?.length || 0,
+          });
           for (const entry of entries) {
             const buffers = await extractArrayBuffers(entry);
+            logger.info("[DIAG] indexedDB entry buffers %o", {
+              databaseName,
+              storeName,
+              buffers: buffers.map((buffer) => buffer.byteLength),
+            });
             for (const data of buffers) {
               const parsed = await tryParseWebData(
                 data,
@@ -379,6 +399,10 @@ function installXhrDataInterceptor(onData?: (data: ArrayBuffer) => void) {
   proto.send = function (body?: Document | XMLHttpRequestBodyInit | null) {
     const xhr = this as XMLHttpRequest & { __unityWebModkitUrl?: string };
     if (xhr.__unityWebModkitUrl && isUnityDataUrl(xhr.__unityWebModkitUrl)) {
+      logger.info("[DIAG] Unity data XHR send %o", {
+        url: xhr.__unityWebModkitUrl,
+        responseType: xhr.responseType,
+      });
       markUnityCandidateSeen();
       xhr.addEventListener("load", async () => {
         try {
@@ -391,9 +415,21 @@ function installXhrDataInterceptor(onData?: (data: ArrayBuffer) => void) {
               xhr.response.byteOffset + xhr.response.byteLength,
             );
           }
-          if (!data) return;
+          logger.info("[DIAG] Unity data XHR load %o", {
+            url: xhr.__unityWebModkitUrl,
+            status: xhr.status,
+            responseType: xhr.responseType,
+            length: data?.byteLength || 0,
+          });
+          if (!data || data.byteLength === 0) {
+            scheduleCacheReprobe("empty Unity data XHR");
+            return;
+          }
           const parsed = await tryParseWebData(data, "intercepted XHR");
-          if (!parsed) return;
+          if (!parsed) {
+            scheduleCacheReprobe("unparsed Unity data XHR");
+            return;
+          }
           page.__UnityWebModkitWebData = parsed;
           notifyWebDataCallbacks(parsed);
           const activeCallbacks: Array<(buffer: ArrayBuffer) => void> =
@@ -408,6 +444,25 @@ function installXhrDataInterceptor(onData?: (data: ArrayBuffer) => void) {
   };
 
   proto.__unityWebModkitXhrPatched = true;
+}
+
+function scheduleCacheReprobe(reason: string) {
+  const page = getPageWindow();
+  logger.info("[DIAG] scheduling Unity data cache reprobe: %s", reason);
+  for (const delay of [100, 500, 1500, 3000, 6000]) {
+    page.setTimeout(() => {
+      probeUnityWebDataFromCache()
+        .then((webData) => {
+          logger.info("[DIAG] Unity data cache reprobe %dms %o", delay, {
+            hit: Boolean(webData),
+            nodes: webData?.nodes.length || 0,
+          });
+        })
+        .catch((err) =>
+          logger.warn("Unity data cache reprobe failed after %dms: %o", delay, err),
+        );
+    }, delay);
+  }
 }
 
 function isUnityDataUrl(input: RequestInfo | URL) {

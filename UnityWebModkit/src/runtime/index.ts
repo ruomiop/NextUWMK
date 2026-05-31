@@ -644,7 +644,7 @@ export class Runtime {
     }
     if (page.__UnityWebModkitUnityCandidateSeen) {
       this.startWebDataProbe();
-      const result = await this.waitForGlobalMetadata(15000, 5000);
+      const result = await this.waitForGlobalMetadata(30000, 30000);
       this.diag("wasm should-handle: candidate seen", { result });
       return result;
     }
@@ -654,7 +654,7 @@ export class Runtime {
     }
     page.__UnityWebModkitUnityCandidateSeen = true;
     this.startWebDataProbe();
-    const result = await this.waitForGlobalMetadata(15000, 5000);
+    const result = await this.waitForGlobalMetadata(30000, 30000);
     this.diag("wasm should-handle: likely unity", { result });
     return result;
   }
@@ -667,10 +667,20 @@ export class Runtime {
     const startedAt = Date.now();
     while (!this.globalMetadata && Date.now() - startedAt < timeoutMs) {
       if (!this.webDataLoaded && Date.now() - startedAt >= noWebDataTimeoutMs) {
+        this.diag("wait metadata stop: no web data", {
+          elapsed: Date.now() - startedAt,
+          timeoutMs,
+          noWebDataTimeoutMs,
+        });
         return false;
       }
       await new Promise((resolve) => page.setTimeout(resolve, 25));
     }
+    this.diag("wait metadata complete", {
+      result: Boolean(this.globalMetadata),
+      elapsed: Date.now() - startedAt,
+      webDataLoaded: this.webDataLoaded,
+    });
     return Boolean(this.globalMetadata);
   }
 

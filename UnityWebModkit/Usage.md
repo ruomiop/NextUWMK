@@ -47,12 +47,12 @@ plugin.onLoaded = () => {
 `plugin.metadata` is available after metadata loading:
 
 ```js
-plugin.metadata.version;              // normalized metadata version
-plugin.metadata.rawVersion;           // raw global-metadata.dat header version
+plugin.metadata.version; // normalized metadata version
+plugin.metadata.rawVersion; // raw global-metadata.dat header version
 plugin.metadata.referencedAssemblies; // assemblies requested by plugins
-plugin.metadata.imageCount;           // original IL2CPP image count
-plugin.metadata.methodCount;          // original IL2CPP method count
-plugin.metadata.fieldCount;           // original IL2CPP field count
+plugin.metadata.imageCount; // original IL2CPP image count
+plugin.metadata.methodCount; // original IL2CPP method count
+plugin.metadata.fieldCount; // original IL2CPP field count
 ```
 
 ## Method Hooks
@@ -148,9 +148,9 @@ Return values are wrapped in `ValueWrapper`.
 ```js
 const value = new UWM.ValueWrapper(ptr);
 
-value.val();                  // raw pointer/value
-value.mstr();                 // read managed UTF-16 string
-value.getClassName();         // read IL2CPP class name from object pointer
+value.val(); // raw pointer/value
+value.mstr(); // read managed UTF-16 string
+value.getClassName(); // read IL2CPP class name from object pointer
 value.readField(0x10, "i32"); // read by raw offset
 value.writeField(0x10, "i32", 123);
 ```
@@ -207,10 +207,10 @@ try {
 Other helpers:
 
 ```js
-plugin.slice(address, size);       // Uint8Array copy
-plugin.memcpy(dest, src, count);   // copy wasm memory
-plugin.createMstr("hello");        // managed string
-plugin.createObject(typeInfoPtr);  // managed object
+plugin.slice(address, size); // Uint8Array copy
+plugin.memcpy(dest, src, count); // copy wasm memory
+plugin.createMstr("hello"); // managed string
+plugin.createObject(typeInfoPtr); // managed object
 ```
 
 ## Field Discovery
@@ -253,10 +253,16 @@ It is designed for cases where SDK metadata gives class/method names, but the li
 Find live objects/components by type:
 
 ```js
+console.log(plugin.findTypes("PlayerController"));
 const players = plugin.objects.findByType("PlayerController");
 const transforms = plugin.objects.findComponents("UnityEngine.Transform");
 const cameras = plugin.objects.findByType("UnityEngine.Camera");
 ```
+
+`findTypes(pattern)` searches loaded metadata and shows the assembly/image used for
+type resolution. `objects.findByType()` accepts short names, full names, or
+assembly-qualified names and tries Unity's active-object query plus
+`Resources.FindObjectsOfTypeAll`.
 
 Read common Unity object relations:
 

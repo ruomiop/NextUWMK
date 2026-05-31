@@ -131,8 +131,8 @@ export class Runtime {
     const names = Array.isArray(globalName)
       ? globalName
       : globalName
-        ? [globalName]
-        : [];
+      ? [globalName]
+      : [];
     for (const name of names) {
       if (!name) continue;
       Object.defineProperty(page, name, {
@@ -1691,7 +1691,8 @@ export class Runtime {
       get HEAPU8() {
         const pageModule = (getPageWindow() as any)?.Module;
         if (pageModule?.HEAPU8) return pageModule.HEAPU8;
-        if (runtime.wasmMemory) return new Uint8Array(runtime.wasmMemory.buffer);
+        if (runtime.wasmMemory)
+          return new Uint8Array(runtime.wasmMemory.buffer);
         return undefined;
       },
       get asm() {
@@ -2006,6 +2007,95 @@ export class Runtime {
         field.typeName.toLowerCase().includes(needle) ||
         field.name.toLowerCase().includes(needle),
     );
+  }
+
+  public findTypes(pattern: string) {
+    if (!this.globalMetadata) return [];
+    const needle = pattern.toLowerCase();
+    const stringOffset = this.getMetadataSectionOffset("string", "strings");
+    const reader = new BinaryReader(this.globalMetadata.buffer);
+    const results: Array<{
+      typeName: string;
+      assemblyName: string;
+      imageName: string;
+      typeIndex?: number;
+    }> = [];
+
+    for (const imageDef of this.globalMetadata.imageDefs) {
+      const imageName = this.getMetadataString(
+        reader,
+        stringOffset,
+        imageDef.nameIndex,
+      );
+      const assemblyName = imageName.replace(/\.dll$/i, "");
+      const typeEnd = imageDef.typeStart + imageDef.typeCount;
+      for (const typeDef of this.globalMetadata.typeDefs) {
+        const typeIndex = typeDef.typeIndex;
+        if (
+          typeIndex === undefined ||
+          typeIndex < imageDef.typeStart ||
+          typeIndex >= typeEnd
+        ) {
+          continue;
+        }
+        const name = this.getMetadataString(
+          reader,
+          stringOffset,
+          typeDef.nameIndex,
+        );
+        const namespaceName = this.getMetadataString(
+          reader,
+          stringOffset,
+          typeDef.namespaceIndex,
+        );
+        const typeName = namespaceName ? `${namespaceName}.${name}` : name;
+        const shortName = typeName.split(".").pop() || typeName;
+        if (
+          typeName.toLowerCase().includes(needle) ||
+          shortName.toLowerCase() === needle ||
+          `${typeName}, ${assemblyName}`.toLowerCase().includes(needle)
+        ) {
+          results.push({ typeName, assemblyName, imageName, typeIndex });
+        }
+      }
+    }
+    return results;
+  }
+
+  public getRuntimeTypeNameCandidates(targetClass: string): string[] {
+    const seen = new Set<string>();
+    const candidates: string[] = [];
+    const add = (value: string | undefined) => {
+      if (!value || seen.has(value)) return;
+      seen.add(value);
+      candidates.push(value);
+    };
+
+    add(targetClass);
+    for (const type of this.findTypes(targetClass)) {
+      add(type.typeName);
+      add(`${type.typeName}, ${type.assemblyName}`);
+      add(`${type.typeName}, ${type.imageName}`);
+    }
+    return candidates;
+  }
+
+  private getMetadataSectionOffset(
+    legacyName: string,
+    modernName = legacyName,
+  ) {
+    const header = this.globalMetadata?.header;
+    if (!header) return 0;
+    return header[`${modernName}Offset`] ?? header[`${legacyName}Offset`] ?? 0;
+  }
+
+  private getMetadataString(
+    reader: BinaryReader,
+    base: number,
+    offset: number,
+  ) {
+    reader.seek(base + offset);
+    return reader.readNullTerminatedUTF8String();
   }
 
   private getCandidateTypeNames(targetClass: string): string[] {
@@ -2398,6 +2488,14 @@ class ModkitPlugin {
     return this._runtime.findFields(pattern);
   }
 
+  public findTypes(pattern: string) {
+    return this._runtime.findTypes(pattern);
+  }
+
+  public getTypeNameCandidates(typeName: string) {
+    return this._runtime.getRuntimeTypeNameCandidates(typeName);
+  }
+
   public memcpy(
     dest: ValueWrapper | number,
     src: ValueWrapper | number,
@@ -2453,13 +2551,15 @@ class ObjectQueryApi {
   public findByType(typeName: string): ValueWrapper[] {
     const type = this.getType(typeName);
     if (!type) return [];
-    const array = this.tryCall(
+    const array = this.tryCallVariants(
       [
         "UnityEngine.Object$$FindObjectsOfType_0",
         "UnityEngine.Object$$FindObjectsOfType_12890",
         "UnityEngine.Object$$FindObjectsOfType",
+        "UnityEngine.Resources$$FindObjectsOfTypeAll_0",
+        "UnityEngine.Resources$$FindObjectsOfTypeAll",
       ],
-      [type, 0],
+      [[type], [type, 0]],
     );
     return array ? this.readObjectArray(array) : [];
   }
@@ -2474,10 +2574,7 @@ class ObjectQueryApi {
   }
 
   public name(object: ValueWrapper | number): string | null {
-    const result = this.tryCall(["UnityEngine.Object$$get_name"], [
-      object,
-      0,
-    ]);
+    const result = this.tryCall(["UnityEngine.Object$$get_name"], [object, 0]);
     if (!result || result.val() <= 0) return null;
     try {
       return result.mstr();
@@ -2496,7 +2593,9 @@ class ObjectQueryApi {
     );
   }
 
-  public gameObject(component: ValueWrapper | number): ValueWrapper | undefined {
+  public gameObject(
+    component: ValueWrapper | number,
+  ): ValueWrapper | undefined {
     return this.tryCall(
       [
         "UnityEngine.Component$$get_gameObject",
@@ -2512,7 +2611,8 @@ class ObjectQueryApi {
   ): ValueWrapper | undefined {
     const type = this.getType(typeName);
     if (!type) return undefined;
-    const gameObject = this.gameObject(object) || new ValueWrapper(this.ptr(object));
+    const gameObject =
+      this.gameObject(object) || new ValueWrapper(this.ptr(object));
     return this.tryCall(
       [
         "UnityEngine.GameObject$$GetComponent_0",
@@ -2526,10 +2626,10 @@ class ObjectQueryApi {
 
   public childCount(transform: ValueWrapper | number): number {
     return (
-      this.tryCall(["UnityEngine.Transform$$get_childCount"], [
-        transform,
-        0,
-      ])?.val() ?? 0
+      this.tryCall(
+        ["UnityEngine.Transform$$get_childCount"],
+        [transform, 0],
+      )?.val() ?? 0
     );
   }
 
@@ -2537,11 +2637,10 @@ class ObjectQueryApi {
     transform: ValueWrapper | number,
     index: number,
   ): ValueWrapper | undefined {
-    return this.tryCall(["UnityEngine.Transform$$GetChild"], [
-      transform,
-      index,
-      0,
-    ]);
+    return this.tryCall(
+      ["UnityEngine.Transform$$GetChild"],
+      [transform, index, 0],
+    );
   }
 
   public children(transform: ValueWrapper | number): ValueWrapper[] {
@@ -2601,6 +2700,17 @@ class ObjectQueryApi {
     return undefined;
   }
 
+  private tryCallVariants(
+    targets: string[],
+    argVariants: any[][],
+  ): ValueWrapper | undefined {
+    for (const args of argVariants) {
+      const result = this.tryCall(targets, args);
+      if (result) return result;
+    }
+    return undefined;
+  }
+
   private readObjectArray(array: ValueWrapper): ValueWrapper[] {
     const ptr = array.val();
     if (ptr <= 0) return [];
@@ -2638,13 +2748,17 @@ class ObjectQueryApi {
     const shortName = typeName.startsWith("UnityEngine.")
       ? typeName
       : `UnityEngine.${typeName}`;
+    const runtimeCandidates = this.plugin.getTypeNameCandidates(typeName);
     return [
+      ...runtimeCandidates,
       typeName,
       `${typeName}, Assembly-CSharp`,
       `${typeName}, mscorlib`,
       `${typeName}, UnityEngine.CoreModule`,
       `${shortName}, UnityEngine.CoreModule`,
-    ];
+    ].filter(
+      (candidate, index, candidates) => candidates.indexOf(candidate) === index,
+    );
   }
 
   private ptr(value: ValueWrapper | number) {

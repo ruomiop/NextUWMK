@@ -28,6 +28,7 @@ The 0.1 release documents and exposes several APIs that are especially useful wh
 - `plugin.metadata`
 - `plugin.listFields(targetClass?)`
 - `plugin.findFields(pattern)`
+- `plugin.findTypes(pattern)`
 - `plugin.registerFieldOffsets(offsets)`
 - `plugin.objects.findByType(typeName)`
 - `plugin.objects.findComponents(typeName)`

@@ -3005,10 +3005,7 @@ class ObjectQueryApi {
           method: attempt.methods[0],
           mode: attempt.mode,
         });
-        const result = this.tryCallReturn(
-          attempt.methods,
-          attempt.args,
-        );
+        const result = this.tryCallHandleTypeAttempt(attempt);
         trace.handleResults.push({
           typeIndex: metadataType.typeIndex,
           runtimeTypeIndex: metadataType.runtimeTypeIndex,
@@ -3065,6 +3062,26 @@ class ObjectQueryApi {
       {
         methods: ["System.Type$$GetTypeFromHandle"],
         args: [typeAddress],
+        mode: "managed-return",
+      },
+      {
+        methods: ["System.Type$$internal_from_handle"],
+        args: [typeAddress],
+        mode: "managed-return",
+      },
+      {
+        methods: ["System.Type$$GetTypeFromHandle"],
+        args: [typeAddress, 0],
+        mode: "managed-return-extra",
+      },
+      {
+        methods: ["System.Type$$internal_from_handle"],
+        args: [typeAddress, 0],
+        mode: "managed-return-extra",
+      },
+      {
+        methods: ["System.Type$$GetTypeFromHandle"],
+        args: [typeAddress],
         mode: "direct",
       },
       {
@@ -3081,28 +3098,19 @@ class ObjectQueryApi {
         methods: ["System.Type$$internal_from_handle"],
         args: [typeAddress, 0],
         mode: "direct-extra",
-      },
-      {
-        methods: ["System.Type$$GetTypeFromHandle"],
-        args: [typeAddress, 0],
-        mode: "sret-direct",
-      },
-      {
-        methods: ["System.Type$$internal_from_handle"],
-        args: [typeAddress, 0],
-        mode: "sret-direct",
-      },
-      {
-        methods: ["System.Type$$GetTypeFromHandle"],
-        args: [typeAddress],
-        mode: "sret-direct-short",
-      },
-      {
-        methods: ["System.Type$$internal_from_handle"],
-        args: [typeAddress],
-        mode: "sret-direct-short",
       },
     ];
+  }
+
+  private tryCallHandleTypeAttempt(attempt: {
+    methods: string[];
+    args: any[];
+    mode: string;
+  }): ValueWrapper | undefined {
+    if (attempt.mode.startsWith("managed-return")) {
+      return this.tryCallManagedReturn(attempt.methods, attempt.args);
+    }
+    return this.tryCallPointerDirect(attempt.methods, attempt.args);
   }
 
   public findByType(typeName: string): ValueWrapper[] {

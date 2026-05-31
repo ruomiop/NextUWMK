@@ -424,7 +424,10 @@ function installXhrDataInterceptor(onData?: (data: ArrayBuffer) => void) {
         responseType: xhr.responseType,
       });
       markUnityCandidateSeen();
-      xhr.addEventListener("load", async () => {
+      let inspected = false;
+      const inspect = async (phase: string) => {
+        if (inspected || xhr.readyState !== 4) return;
+        inspected = true;
         try {
           let data: ArrayBuffer | undefined;
           if (xhr.response instanceof ArrayBuffer) {
@@ -435,8 +438,10 @@ function installXhrDataInterceptor(onData?: (data: ArrayBuffer) => void) {
               xhr.response.byteOffset + xhr.response.byteLength,
             );
           }
-          logger.info("[DIAG] Unity data XHR load %o", {
+          logger.info("[DIAG] Unity data XHR complete %o", {
             url: xhr.__unityWebModkitUrl,
+            phase,
+            readyState: xhr.readyState,
             status: xhr.status,
             responseType: xhr.responseType,
             length: data?.byteLength || 0,
@@ -458,7 +463,17 @@ function installXhrDataInterceptor(onData?: (data: ArrayBuffer) => void) {
         } catch (err) {
           logger.warn("Failed to inspect intercepted Unity XHR data: %o", err);
         }
-      });
+      };
+      xhr.addEventListener(
+        "readystatechange",
+        () => void inspect("readystatechange"),
+      );
+      xhr.addEventListener("load", () => void inspect("load"));
+      xhr.addEventListener("loadend", () => void inspect("loadend"));
+      page.setTimeout(() => void inspect("timeout-0"), 0);
+      page.setTimeout(() => void inspect("timeout-250"), 250);
+      page.setTimeout(() => void inspect("timeout-1000"), 1000);
+      page.setTimeout(() => void inspect("timeout-3000"), 3000);
     }
     return originalSend.apply(this, arguments as any);
   };

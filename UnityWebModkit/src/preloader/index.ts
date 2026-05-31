@@ -65,15 +65,40 @@ export async function probeUnityWebDataFromCache(): Promise<
     return cacheStorageWebData;
   }
 
-  if (!("indexedDB" in page) || !("databases" in page.indexedDB))
-    return undefined;
+  const databaseNames = await getIndexedDbNames(["UnityCache"]);
+  for (const databaseName of databaseNames) {
+    const parsed = await loadWebDataFromIndexedDb(databaseName);
+    if (parsed) return parsed;
+  }
+  return undefined;
+}
 
-  const databases: IDBDatabaseInfo[] = await page.indexedDB.databases();
-  const unityCache = databases.findIndex((d) => d.name === "UnityCache");
-  if (unityCache == -1) return undefined;
+async function getIndexedDbNames(fallbackNames: string[] = []) {
+  const page = getPageWindow();
+  if (!("indexedDB" in page)) return [];
+  if ("databases" in page.indexedDB) {
+    try {
+      const databases: IDBDatabaseInfo[] = await page.indexedDB.databases();
+      const names = databases
+        .map((db) => db.name)
+        .filter(
+          (name: string | undefined): name is string =>
+            !!name && name.includes("UnityCache"),
+        );
+      if (names.length > 0) return names;
+    } catch (err) {
+      logger.debug("Unable to enumerate indexedDB databases: %o", err);
+    }
+  }
+  return fallbackNames;
+}
 
+function loadWebDataFromIndexedDb(
+  databaseName: string,
+): Promise<WebData | undefined> {
+  const page = getPageWindow();
   return new Promise<WebData | undefined>((resolve) => {
-    const request = page.indexedDB.open("UnityCache");
+    const request = page.indexedDB.open(databaseName);
     request.onerror = () => resolve(undefined);
     request.onsuccess = (event: any) => {
       const db = event.target.result;
@@ -117,7 +142,7 @@ export async function probeUnityWebDataFromCache(): Promise<
             for (const data of buffers) {
               const parsed = await tryParseWebData(
                 data,
-                `UnityCache indexedDB ${storeName}`,
+                `${databaseName} indexedDB ${storeName}`,
               );
               if (parsed) {
                 page.__UnityWebModkitWebData = parsed;
@@ -407,24 +432,18 @@ async function clearUnityCache() {
     );
   }
 
-  if ("indexedDB" in page && "databases" in page.indexedDB) {
-    const databases = await page.indexedDB.databases();
+  if ("indexedDB" in page) {
+    const names = await getIndexedDbNames(["UnityCache"]);
     await Promise.all(
-      databases
-        .map((db: IDBDatabaseInfo) => db.name)
-        .filter(
-          (name: string | undefined): name is string =>
-            !!name && name.includes("UnityCache"),
-        )
-        .map(
-          (name: string) =>
-            new Promise<void>((resolve) => {
-              const request = page.indexedDB.deleteDatabase(name);
-              request.onsuccess = () => resolve();
-              request.onerror = () => resolve();
-              request.onblocked = () => resolve();
-            }),
-        ),
+      names.map(
+        (name: string) =>
+          new Promise<void>((resolve) => {
+            const request = page.indexedDB.deleteDatabase(name);
+            request.onsuccess = () => resolve();
+            request.onerror = () => resolve();
+            request.onblocked = () => resolve();
+          }),
+      ),
     );
   }
 }

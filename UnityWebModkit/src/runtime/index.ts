@@ -90,6 +90,7 @@ export class Runtime {
 
   public constructor() {
     this.logger = new Logger("UnityWebModkit");
+    ValueWrapper.bindRuntime(this);
     if (typeof FinalizationRegistry !== "undefined") {
       this.allocationRegistry = new FinalizationRegistry<number>((ptr) => {
         try {
@@ -2262,9 +2263,15 @@ export class Runtime {
   public findFields(pattern: string) {
     const needle = pattern.toLowerCase();
     return this.listFields().filter(
-      (field) =>
-        field.typeName.toLowerCase().includes(needle) ||
-        field.name.toLowerCase().includes(needle),
+      (field) => {
+        const typeName = field.typeName.toLowerCase();
+        const name = field.name.toLowerCase();
+        return (
+          typeName.includes(needle) ||
+          name.includes(needle) ||
+          `${typeName}.${name}`.includes(needle)
+        );
+      },
     );
   }
 
@@ -2278,9 +2285,15 @@ export class Runtime {
   public findMethods(pattern: string) {
     const needle = pattern.toLowerCase();
     return this.listMethods().filter(
-      (method) =>
-        method.typeName.toLowerCase().includes(needle) ||
-        method.name.toLowerCase().includes(needle),
+      (method) => {
+        const typeName = method.typeName.toLowerCase();
+        const name = method.name.toLowerCase();
+        return (
+          typeName.includes(needle) ||
+          name.includes(needle) ||
+          `${typeName}.${name}`.includes(needle)
+        );
+      },
     );
   }
 
@@ -3704,10 +3717,15 @@ class ObjectQueryApi {
 }
 
 export class ValueWrapper {
+  private static runtime: Runtime | undefined;
   private _result: number;
 
   constructor(result: number) {
     this._result = result;
+  }
+
+  public static bindRuntime(runtime: Runtime) {
+    ValueWrapper.runtime = runtime;
   }
 
   public set(value: ValueWrapper | number) {
@@ -3862,6 +3880,7 @@ export class ValueWrapper {
   }
 
   private static getRuntime(): Runtime {
+    if (ValueWrapper.runtime) return ValueWrapper.runtime;
     const runtime = getPageWindow().UnityWebModkit?.Runtime;
     if (!runtime) throw new Error("UnityWebModkit Runtime is not available");
     return runtime;

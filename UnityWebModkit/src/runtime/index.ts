@@ -2600,6 +2600,25 @@ type ObjectTreeNode = {
   children: ObjectTreeNode[];
 };
 
+type TypeResolutionTrace = {
+  query: string;
+  names: string[];
+  metadataTypes: Array<{
+    typeName: string;
+    assemblyName: string;
+    imageName: string;
+    typeIndex?: number;
+    typeAddress?: number;
+  }>;
+  stringResults: Array<{ name: string; result: number }>;
+  handleResults: Array<{
+    typeIndex?: number;
+    typeAddress?: number;
+    result: number;
+  }>;
+  result?: number;
+};
+
 class ObjectQueryApi {
   private readonly plugin: ModkitPlugin;
   private typeCache = new Map<string, ValueWrapper>();
@@ -2612,8 +2631,26 @@ class ObjectQueryApi {
     const cached = this.typeCache.get(typeName);
     if (cached) return cached;
 
+    const trace = this.resolveType(typeName);
+    if (!trace.result) return undefined;
+    const result = new ValueWrapper(trace.result);
+    this.typeCache.set(typeName, result);
+    return result;
+  }
+
+  public resolveType(typeName: string): TypeResolutionTrace {
     const metadataTypes = this.plugin.findTypes(typeName);
     const names = this.getTypeNameCandidates(typeName);
+    const trace: TypeResolutionTrace = {
+      query: typeName,
+      names,
+      metadataTypes: metadataTypes.map((metadataType) => ({
+        ...metadataType,
+        typeAddress: this.plugin.getRuntimeTypeAddress(metadataType.typeIndex),
+      })),
+      stringResults: [],
+      handleResults: [],
+    };
     for (const name of names) {
       const namePtr = this.plugin.createMstr(name);
       const result = this.tryCallVariants(
@@ -2628,9 +2665,10 @@ class ObjectQueryApi {
         ],
         [[namePtr], [namePtr, 0], [namePtr, 0, 0]],
       );
+      trace.stringResults.push({ name, result: result?.val() ?? 0 });
       if (result && result.val() > 0) {
-        this.typeCache.set(typeName, result);
-        return result;
+        trace.result = result.val();
+        return trace;
       }
     }
     for (const metadataType of metadataTypes) {
@@ -2642,12 +2680,17 @@ class ObjectQueryApi {
         ["System.Type$$GetTypeFromHandle"],
         [typeAddress],
       );
+      trace.handleResults.push({
+        typeIndex: metadataType.typeIndex,
+        typeAddress,
+        result: result?.val() ?? 0,
+      });
       if (result && result.val() > 0) {
-        this.typeCache.set(typeName, result);
-        return result;
+        trace.result = result.val();
+        return trace;
       }
     }
-    return undefined;
+    return trace;
   }
 
   public findByType(typeName: string): ValueWrapper[] {

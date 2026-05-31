@@ -130,6 +130,9 @@ export class Runtime {
     globalName?: string | string[],
   ) {
     const page = getPageWindow();
+    const targets = [page, window, globalThis].filter(
+      (target, index, list) => target && list.indexOf(target) === index,
+    );
     const names = Array.isArray(globalName)
       ? globalName
       : globalName
@@ -137,11 +140,21 @@ export class Runtime {
       : [];
     for (const name of names) {
       if (!name) continue;
-      Object.defineProperty(page, name, {
-        value: plugin,
-        writable: true,
-        configurable: true,
-      });
+      for (const target of targets) {
+        try {
+          Object.defineProperty(target, name, {
+            value: plugin,
+            writable: true,
+            configurable: true,
+          });
+        } catch {
+          try {
+            target[name] = plugin;
+          } catch {
+            // Some browser script worlds expose read-only globals.
+          }
+        }
+      }
     }
   }
 
@@ -939,12 +952,52 @@ export class Runtime {
       for (const plugin of this.plugins) {
         if (plugin.onLoaded) plugin.onLoaded();
       }
+      this.schedulePluginReadyCallbacks();
     };
     const timeout =
       typeof page.setTimeout === "function"
         ? page.setTimeout.bind(page)
         : setTimeout;
     timeout(runCallbacks, 0);
+  }
+
+  private schedulePluginReadyCallbacks() {
+    const page = getPageWindow();
+    const timeout =
+      typeof page.setTimeout === "function"
+        ? page.setTimeout.bind(page)
+        : setTimeout;
+    this.waitForUnityRuntimeReady().then(() => {
+      timeout(() => {
+        for (const plugin of this.plugins) {
+          if (plugin.onReady) plugin.onReady();
+        }
+      }, 1000);
+    });
+  }
+
+  private async waitForUnityRuntimeReady() {
+    const page = getPageWindow();
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < 30000) {
+      const instance = this.getPageUnityInstanceCandidate();
+      const module = instance?.Module;
+      if (module && (module.calledRun || module.asm)) return;
+      await new Promise((resolve) => page.setTimeout(resolve, 50));
+    }
+  }
+
+  private getPageUnityInstanceCandidate() {
+    const page = getPageWindow();
+    const globalGame = typeof page.game !== "undefined" ? page.game : undefined;
+    const candidate =
+      page.__UnityWebModkitUnityInstance ||
+      page.unityInstance ||
+      page.gameInstance ||
+      page.unityGame ||
+      page.game ||
+      globalGame;
+    return candidate?.instance || candidate;
   }
 
   private applyBytecodePatches(wail: WailParser, plugin: ModkitPlugin) {
@@ -1682,16 +1735,10 @@ export class Runtime {
   public getUnityInstance(): any {
     // @ts-ignore Support common Unity WebGL loader globals.
     const page = getPageWindow();
-    const globalGame = typeof page.game !== "undefined" ? page.game : undefined;
-    const candidate =
-      page.__UnityWebModkitUnityInstance ||
-      page.unityInstance ||
-      page.unityGame ||
-      page.game ||
-      globalGame;
+    const candidate = this.getPageUnityInstanceCandidate();
     if (!candidate && this.wasmModule) return { Module: this.wasmModule };
     if (!candidate) throw new Error("Unable to locate Unity WebGL instance");
-    return candidate.instance || candidate;
+    return candidate;
   }
 
   private rememberWasmExports(
@@ -2272,6 +2319,7 @@ class ModkitPlugin {
   public readonly logger: Logger;
   public readonly preferIndirectHooks: boolean;
   public onLoaded: (() => void) | undefined = undefined;
+  public onReady: (() => void) | undefined = undefined;
   private _referencedAssemblies: string[] = [];
   private _hooks: Hook[] = [];
   private _importHooks: ImportHook[] = [];

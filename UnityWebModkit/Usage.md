@@ -249,14 +249,17 @@ plugin.registerFieldOffsets({
 
 `plugin.objects` provides Unity runtime object helpers for exploratory scripts.
 It is designed for cases where SDK metadata gives class/method names, but the live scene/prefab hierarchy must be discovered at runtime.
+Use `onReady` for scene object queries. `onLoaded` runs earlier, immediately after the chainloader starts.
 
 Find live objects/components by type:
 
 ```js
-console.log(plugin.findTypes("PlayerController"));
-const players = plugin.objects.findByType("PlayerController");
-const transforms = plugin.objects.findComponents("UnityEngine.Transform");
-const cameras = plugin.objects.findByType("UnityEngine.Camera");
+plugin.onReady = () => {
+  console.log(plugin.findTypes("PlayerController"));
+  const players = plugin.objects.findByType("PlayerController");
+  const transforms = plugin.objects.findComponents("UnityEngine.Transform");
+  const cameras = plugin.objects.findByType("UnityEngine.Camera");
+};
 ```
 
 `findTypes(pattern)` searches loaded metadata and shows the assembly/image used for

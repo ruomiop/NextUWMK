@@ -2626,6 +2626,8 @@ type TypeResolutionTrace = {
     typeIndex?: number;
     runtimeTypeIndex?: number;
     typeAddress?: number;
+    method?: string;
+    mode?: string;
     result: number;
   }>;
   result?: number;
@@ -2688,22 +2690,58 @@ class ObjectQueryApi {
         metadataType.typeIndex,
       );
       if (!typeAddress) continue;
-      const result = this.tryCall(
-        ["System.Type$$GetTypeFromHandle"],
-        [typeAddress],
-      );
-      trace.handleResults.push({
-        typeIndex: metadataType.typeIndex,
-        runtimeTypeIndex: metadataType.runtimeTypeIndex,
-        typeAddress,
-        result: result?.val() ?? 0,
-      });
-      if (result && result.val() > 0) {
-        trace.result = result.val();
-        return trace;
+      const handleAttempts = this.getHandleTypeAttempts(typeAddress);
+      try {
+        for (const attempt of handleAttempts.attempts) {
+          const result = this.tryCall(attempt.methods, attempt.args);
+          trace.handleResults.push({
+            typeIndex: metadataType.typeIndex,
+            runtimeTypeIndex: metadataType.runtimeTypeIndex,
+            typeAddress,
+            method: attempt.methods[0],
+            mode: attempt.mode,
+            result: result?.val() ?? 0,
+          });
+          if (result && result.val() > 0) {
+            trace.result = result.val();
+            return trace;
+          }
+        }
+      } finally {
+        handleAttempts.dispose();
       }
     }
     return trace;
+  }
+
+  private getHandleTypeAttempts(typeAddress: number) {
+    const runtimeHandle = this.plugin.alloc(4);
+    runtimeHandle.writeField(0, "u32", typeAddress);
+    return {
+      attempts: [
+        {
+          methods: ["System.Type$$GetTypeFromHandle"],
+          args: [typeAddress],
+          mode: "direct",
+        },
+        {
+          methods: ["System.Type$$internal_from_handle"],
+          args: [typeAddress],
+          mode: "direct",
+        },
+        {
+          methods: ["System.Type$$GetTypeFromHandle"],
+          args: [runtimeHandle],
+          mode: "runtime-handle-pointer",
+        },
+        {
+          methods: ["System.Type$$internal_from_handle"],
+          args: [runtimeHandle],
+          mode: "runtime-handle-pointer",
+        },
+      ],
+      dispose: () => runtimeHandle.dispose(),
+    };
   }
 
   public findByType(typeName: string): ValueWrapper[] {

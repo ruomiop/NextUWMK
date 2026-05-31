@@ -2951,6 +2951,7 @@ type TypeResolutionTrace = {
     typeAddress?: number;
     method?: string;
     mode?: string;
+    args?: any[];
     result: number;
   }>;
   result?: number;
@@ -3012,15 +3013,21 @@ class ObjectQueryApi {
           typeAddress,
           method: attempt.methods[0],
           mode: attempt.mode,
+          args: this.formatDiagArgs(attempt.args),
           result: result?.val() ?? 0,
         });
         this.plugin.diag("objects.resolveType handle result", {
           typeName,
           method: attempt.methods[0],
           mode: attempt.mode,
+          args: this.formatDiagArgs(attempt.args),
           result: result?.val() ?? 0,
         });
-        if (result && this.isLikelyPointer(result.val())) {
+        if (
+          result &&
+          this.isLikelyPointer(result.val()) &&
+          !attempt.mode.startsWith("raw-direct")
+        ) {
           trace.result = result.val();
           this.plugin.diag("objects.resolveType success", trace);
           return trace;
@@ -3062,42 +3069,47 @@ class ObjectQueryApi {
       {
         methods: ["System.Type$$GetTypeFromHandle"],
         args: [typeAddress],
-        mode: "managed-return",
+        mode: "handle-ptr-managed-return",
       },
       {
         methods: ["System.Type$$internal_from_handle"],
         args: [typeAddress],
-        mode: "managed-return",
+        mode: "handle-ptr-managed-return",
       },
       {
         methods: ["System.Type$$GetTypeFromHandle"],
         args: [typeAddress, 0],
-        mode: "managed-return-extra",
+        mode: "handle-ptr-managed-return-extra",
       },
       {
         methods: ["System.Type$$internal_from_handle"],
         args: [typeAddress, 0],
-        mode: "managed-return-extra",
+        mode: "handle-ptr-managed-return-extra",
       },
       {
         methods: ["System.Type$$GetTypeFromHandle"],
         args: [typeAddress],
-        mode: "direct",
+        mode: "handle-ptr-direct",
       },
       {
         methods: ["System.Type$$internal_from_handle"],
         args: [typeAddress],
-        mode: "direct",
+        mode: "handle-ptr-direct",
       },
       {
         methods: ["System.Type$$GetTypeFromHandle"],
         args: [typeAddress, 0],
-        mode: "direct-extra",
+        mode: "handle-ptr-direct-extra",
       },
       {
         methods: ["System.Type$$internal_from_handle"],
         args: [typeAddress, 0],
-        mode: "direct-extra",
+        mode: "handle-ptr-direct-extra",
+      },
+      {
+        methods: ["System.Type$$GetTypeFromHandle"],
+        args: [typeAddress],
+        mode: "raw-direct-diag",
       },
     ];
   }
@@ -3107,10 +3119,36 @@ class ObjectQueryApi {
     args: any[];
     mode: string;
   }): ValueWrapper | undefined {
-    if (attempt.mode.startsWith("managed-return")) {
-      return this.tryCallManagedReturn(attempt.methods, attempt.args);
+    if (attempt.mode.startsWith("handle-ptr")) {
+      return this.withRuntimeTypeHandle(attempt.args[0], (handle) => {
+        const args = [handle, ...attempt.args.slice(1)];
+        if (attempt.mode.includes("managed-return")) {
+          return this.tryCallManagedReturn(attempt.methods, args);
+        }
+        return this.tryCallPointerDirect(attempt.methods, args);
+      });
+    }
+    if (attempt.mode.startsWith("raw-direct")) {
+      return this.tryCallPointerDirect(attempt.methods, attempt.args);
     }
     return this.tryCallPointerDirect(attempt.methods, attempt.args);
+  }
+
+  private withRuntimeTypeHandle<T>(
+    typeAddress: number,
+    read: (handle: ValueWrapper) => T,
+  ): T {
+    const handle = this.plugin.alloc(4);
+    try {
+      handle.writeField(0, "u32", typeAddress);
+      return read(handle);
+    } finally {
+      handle.dispose();
+    }
+  }
+
+  private formatDiagArgs(args: any[]) {
+    return args.map((arg) => (arg instanceof ValueWrapper ? arg.val() : arg));
   }
 
   public findByType(typeName: string): ValueWrapper[] {

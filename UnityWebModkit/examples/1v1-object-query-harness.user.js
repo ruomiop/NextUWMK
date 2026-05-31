@@ -9,7 +9,7 @@
 // @grant       GM_xmlhttpRequest
 // @connect     127.0.0.1
 // @connect     localhost
-// @require     https://raw.githubusercontent.com/ruomiop/NextUWMK/refs/heads/main/UnityWebModkit/dist/unity-web-modkit.a7727341cadaeac93015.js
+// @require     https://raw.githubusercontent.com/ruomiop/NextUWMK/refs/heads/main/UnityWebModkit/dist/unity-web-modkit.0a430a9299dd921c221b.js
 // ==/UserScript==
 
 (function () {
@@ -19,6 +19,7 @@
   const HARNESS_URL = "http://127.0.0.1:18777/log";
 
   function simplify(value, depth = 0) {
+    if (value === undefined) return { undefined: true };
     if (value == null) return value;
     if (typeof value === "number" || typeof value === "string" || typeof value === "boolean") {
       return value;
@@ -39,6 +40,14 @@
       return out;
     }
     return String(value);
+  }
+
+  function resultPayload(value) {
+    return {
+      value: simplify(value),
+      isUndefined: value === undefined,
+      isNull: value === null,
+    };
   }
 
   function post(level, stage, message, data) {
@@ -86,7 +95,7 @@
   function runStep(stage, fn) {
     try {
       const result = fn();
-      info(stage, "ok", result);
+      info(stage, "ok", resultPayload(result));
       return result;
     } catch (err) {
       error(stage, "threw", {

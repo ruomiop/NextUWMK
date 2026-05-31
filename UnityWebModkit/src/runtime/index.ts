@@ -2980,17 +2980,26 @@ class ObjectQueryApi {
   public findByType(typeName: string): ValueWrapper[] {
     const type = this.getType(typeName);
     if (!type) return [];
-    const array = this.tryCallVariants(
-      [
-        "UnityEngine.Object$$FindObjectsOfType_0",
-        "UnityEngine.Object$$FindObjectsOfType_12890",
-        "UnityEngine.Object$$FindObjectsOfType",
-        "UnityEngine.Resources$$FindObjectsOfTypeAll_0",
-        "UnityEngine.Resources$$FindObjectsOfTypeAll",
-      ],
-      [[type], [type, 0]],
-    );
-    return array ? this.readObjectArray(array) : [];
+    this.plugin.diag("objects.findByType start", {
+      typeName,
+      type: type.val(),
+    });
+    const array = this.tryFindObjectsArray(typeName, type);
+    if (!array) {
+      this.plugin.diag("objects.findByType no array", {
+        typeName,
+        type: type.val(),
+      });
+      return [];
+    }
+    const objects = this.readObjectArray(array);
+    this.plugin.diag("objects.findByType result", {
+      typeName,
+      type: type.val(),
+      array: array.val(),
+      count: objects.length,
+    });
+    return objects;
   }
 
   public findComponents(typeName: string): ValueWrapper[] {
@@ -3188,6 +3197,104 @@ class ObjectQueryApi {
     for (const args of argVariants) {
       const result = this.tryCall(targets, args);
       if (result) return result;
+    }
+    return undefined;
+  }
+
+  private tryFindObjectsArray(
+    typeName: string,
+    type: ValueWrapper,
+  ): ValueWrapper | undefined {
+    const targets = [
+      "UnityEngine.Resources$$FindObjectsOfTypeAll",
+      "UnityEngine.Resources$$FindObjectsOfTypeAll_0",
+      "UnityEngine.Object$$FindObjectsOfType",
+      "UnityEngine.Object$$FindObjectsOfType_0",
+      "UnityEngine.Object$$FindObjectsOfType_12890",
+    ];
+    const argVariants = [[type], [type, 0], [type, 1], [type, 0, 0]];
+    for (const args of argVariants) {
+      const direct = this.tryCallPointerDirectWithDiag(
+        targets,
+        args,
+        "objects.findByType direct",
+        typeName,
+      );
+      if (direct) return direct;
+      const managed = this.tryCallManagedReturnWithDiag(
+        targets,
+        args,
+        "objects.findByType managed",
+        typeName,
+      );
+      if (managed) return managed;
+    }
+    return undefined;
+  }
+
+  private tryCallPointerDirectWithDiag(
+    targets: string[],
+    args: any[],
+    label: string,
+    typeName: string,
+  ): ValueWrapper | undefined {
+    for (const target of targets) {
+      const normalizedArgs = args.map((arg) =>
+        arg instanceof ValueWrapper ? arg.val() : arg,
+      );
+      try {
+        const result = this.plugin.call(target, args);
+        this.plugin.diag(label, {
+          typeName,
+          target,
+          args: normalizedArgs,
+          result: result?.val() ?? 0,
+        });
+        if (result && this.isLikelyPointer(result.val())) return result;
+      } catch (err) {
+        this.plugin.diag(`${label} failed`, {
+          typeName,
+          target,
+          args: normalizedArgs,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+    return undefined;
+  }
+
+  private tryCallManagedReturnWithDiag(
+    targets: string[],
+    args: any[],
+    label: string,
+    typeName: string,
+  ): ValueWrapper | undefined {
+    for (const target of targets) {
+      const normalizedArgs = args.map((arg) =>
+        arg instanceof ValueWrapper ? arg.val() : arg,
+      );
+      const result = this.plugin.alloc(4);
+      try {
+        result.writeField(0, "u32", 0);
+        this.plugin.call(target, [result, ...args]);
+        const ptr = result.readField(0, "u32")?.val() ?? 0;
+        this.plugin.diag(label, {
+          typeName,
+          target,
+          args: normalizedArgs,
+          result: ptr,
+        });
+        if (this.isLikelyPointer(ptr)) return new ValueWrapper(ptr);
+      } catch (err) {
+        this.plugin.diag(`${label} failed`, {
+          typeName,
+          target,
+          args: normalizedArgs,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      } finally {
+        result.dispose();
+      }
     }
     return undefined;
   }

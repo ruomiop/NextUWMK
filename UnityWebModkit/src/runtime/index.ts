@@ -2989,6 +2989,45 @@ class ObjectQueryApi {
       stringResults: [],
       handleResults: [],
     };
+    for (const metadataType of metadataTypes) {
+      const typeAddress = this.plugin.getRuntimeTypeAddress(
+        metadataType.typeIndex,
+      );
+      if (!typeAddress) continue;
+      for (const attempt of this.getHandleTypeAttempts(typeAddress)) {
+        this.plugin.diag("objects.resolveType try handle", {
+          typeName,
+          typeIndex: metadataType.typeIndex,
+          runtimeTypeIndex: metadataType.runtimeTypeIndex,
+          typeAddress,
+          method: attempt.methods[0],
+          mode: attempt.mode,
+        });
+        const result = this.tryCallReturn(
+          attempt.methods,
+          attempt.args,
+        );
+        trace.handleResults.push({
+          typeIndex: metadataType.typeIndex,
+          runtimeTypeIndex: metadataType.runtimeTypeIndex,
+          typeAddress,
+          method: attempt.methods[0],
+          mode: attempt.mode,
+          result: result?.val() ?? 0,
+        });
+        this.plugin.diag("objects.resolveType handle result", {
+          typeName,
+          method: attempt.methods[0],
+          mode: attempt.mode,
+          result: result?.val() ?? 0,
+        });
+        if (result && this.isLikelyPointer(result.val())) {
+          trace.result = result.val();
+          this.plugin.diag("objects.resolveType success", trace);
+          return trace;
+        }
+      }
+    }
     for (const name of names) {
       const namePtr = this.plugin.createMstr(name);
       this.plugin.diag("objects.resolveType try string", { typeName, name });
@@ -3013,45 +3052,6 @@ class ObjectQueryApi {
         trace.result = result.val();
         this.plugin.diag("objects.resolveType success", trace);
         return trace;
-      }
-    }
-    for (const metadataType of metadataTypes) {
-      const typeAddress = this.plugin.getRuntimeTypeAddress(
-        metadataType.typeIndex,
-      );
-      if (!typeAddress) continue;
-      for (const attempt of this.getHandleTypeAttempts(typeAddress)) {
-        this.plugin.diag("objects.resolveType try handle", {
-          typeName,
-          typeIndex: metadataType.typeIndex,
-          runtimeTypeIndex: metadataType.runtimeTypeIndex,
-          typeAddress,
-          method: attempt.methods[0],
-          mode: attempt.mode,
-        });
-        const result = this.tryCallManagedReturn(
-          attempt.methods,
-          attempt.args,
-        );
-        trace.handleResults.push({
-          typeIndex: metadataType.typeIndex,
-          runtimeTypeIndex: metadataType.runtimeTypeIndex,
-          typeAddress,
-          method: attempt.methods[0],
-          mode: attempt.mode,
-          result: result?.val() ?? 0,
-        });
-        this.plugin.diag("objects.resolveType handle result", {
-          typeName,
-          method: attempt.methods[0],
-          mode: attempt.mode,
-          result: result?.val() ?? 0,
-        });
-        if (result && this.isLikelyPointer(result.val())) {
-          trace.result = result.val();
-          this.plugin.diag("objects.resolveType success", trace);
-          return trace;
-        }
       }
     }
     this.plugin.diag("objects.resolveType failed", trace);

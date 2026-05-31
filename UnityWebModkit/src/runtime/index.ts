@@ -3160,19 +3160,19 @@ class ObjectQueryApi {
 
   public runtimeTypeName(type: ValueWrapper | number): string | null {
     return this.typeString(
-      [
+      this.getRuntimeTypeStringTargets("Name", [
         "System.Type$$get_Name",
         "System.Reflection.MemberInfo$$get_Name",
-      ],
+      ]),
       type,
     );
   }
 
   public runtimeTypeFullName(type: ValueWrapper | number): string | null {
     return this.typeString(
-      [
+      this.getRuntimeTypeStringTargets("FullName", [
         "System.Type$$get_FullName",
-      ],
+      ]),
       type,
     );
   }
@@ -3481,13 +3481,26 @@ class ObjectQueryApi {
   }
 
   private typeString(targets: string[], type: ValueWrapper | number): string | null {
-    const result = this.tryCall(targets, [type, 0]);
+    const result = this.tryCallReturnVariants(targets, [[type], [type, 0]]);
     if (!result || result.val() <= 0) return null;
     try {
       return result.mstr();
     } catch {
       return null;
     }
+  }
+
+  private getRuntimeTypeStringTargets(propertyName: string, fallback: string[]) {
+    const dynamicTargets = this.plugin
+      .findMethods(`get_${propertyName}`)
+      .filter(
+        (method) =>
+          method.typeName === "System.Type" ||
+          method.typeName === "System.Reflection.MemberInfo",
+      )
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .map((method) => `${method.typeName}$$${method.name}`);
+    return [...new Set([...dynamicTargets, ...fallback])];
   }
 
   private tryCallPointerDirectWithDiag(

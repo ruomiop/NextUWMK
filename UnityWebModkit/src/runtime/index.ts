@@ -73,6 +73,8 @@ export class Runtime {
   private internalWasmFunctions: any;
   private internalWasmCode: any;
   private wasmExports: any;
+  private wasmModule: any;
+  private wasmMemory?: WebAssembly.Memory;
   private wasmCacheKey = "";
   private wasmImportFunctionCount = 0;
   private stringNewEncoding: "utf8" | "utf16" = "utf8";
@@ -605,7 +607,7 @@ export class Runtime {
           this.logger.message("Chainloader initialized");
           this.logger.info("%d plugin(s) to load", this.plugins.length);
           this.instantiate(bufferSource, importObject).then((source: any) => {
-            this.rememberWasmExports(source);
+            this.rememberWasmExports(source, importObject);
             const tableName =
               this.tableName || this.resolveTableName(source.instance.exports);
             for (const plugin of this.plugins) {
@@ -694,7 +696,7 @@ export class Runtime {
           this.logger.info("%d plugin(s) to load", this.plugins.length);
           this.instantiate(patchedBuffer, importObject).then(
             (source: WebAssembly.WebAssemblyInstantiatedSource) => {
-              this.rememberWasmExports(source);
+              this.rememberWasmExports(source, importObject);
               const tableName: string =
                 this.tableName ||
                 this.resolveTableName((source as any).instance.exports);
@@ -883,7 +885,7 @@ export class Runtime {
         wail.parse();
         this.instantiate(wail.write(), importObject).then(
           (instantiatedSource: WebAssembly.WebAssemblyInstantiatedSource) => {
-            this.rememberWasmExports(instantiatedSource);
+            this.rememberWasmExports(instantiatedSource, importObject);
             const tableName: string =
               this.tableName ||
               this.resolveTableName(
@@ -1666,14 +1668,35 @@ export class Runtime {
       page.unityGame ||
       page.game ||
       globalGame;
+    if (!candidate && this.wasmModule) return { Module: this.wasmModule };
     if (!candidate) throw new Error("Unable to locate Unity WebGL instance");
     return candidate.instance || candidate;
   }
 
   private rememberWasmExports(
     source: WebAssembly.WebAssemblyInstantiatedSource,
+    importObject?: WebAssembly.Imports,
   ) {
     this.wasmExports = (source as any)?.instance?.exports;
+    this.wasmMemory =
+      this.wasmMemory ||
+      ((importObject as any)?.env?.memory as WebAssembly.Memory | undefined);
+    this.wasmModule = this.createWasmModuleFallback();
+  }
+
+  private createWasmModuleFallback() {
+    const runtime = this;
+    return {
+      get HEAPU8() {
+        const pageModule = (getPageWindow() as any)?.Module;
+        if (pageModule?.HEAPU8) return pageModule.HEAPU8;
+        if (runtime.wasmMemory) return new Uint8Array(runtime.wasmMemory.buffer);
+        return undefined;
+      },
+      get asm() {
+        return runtime.wasmExports;
+      },
+    };
   }
 
   private getWasmExportFunction(name: string) {

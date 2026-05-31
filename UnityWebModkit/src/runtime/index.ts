@@ -3109,9 +3109,20 @@ class ObjectQueryApi {
     this.plugin.diag("objects.findByType start", {
       typeName,
       type: type.val(),
+      resolvedTypeName: this.runtimeTypeName(type),
+      resolvedTypeFullName: this.runtimeTypeFullName(type),
     });
     const array = this.tryFindObjectsArray(typeName, type);
     if (!array) {
+      const single = this.tryFindObject(typeName, type);
+      if (single) {
+        this.plugin.diag("objects.findByType singleton result", {
+          typeName,
+          type: type.val(),
+          object: single.val(),
+        });
+        return [single];
+      }
       this.plugin.diag("objects.findByType no array", {
         typeName,
         type: type.val(),
@@ -3145,6 +3156,25 @@ class ObjectQueryApi {
     } catch {
       return null;
     }
+  }
+
+  public runtimeTypeName(type: ValueWrapper | number): string | null {
+    return this.typeString(
+      [
+        "System.Type$$get_Name",
+        "System.Reflection.MemberInfo$$get_Name",
+      ],
+      type,
+    );
+  }
+
+  public runtimeTypeFullName(type: ValueWrapper | number): string | null {
+    return this.typeString(
+      [
+        "System.Type$$get_FullName",
+      ],
+      type,
+    );
   }
 
   public transform(object: ValueWrapper | number): ValueWrapper | undefined {
@@ -3357,6 +3387,36 @@ class ObjectQueryApi {
     return undefined;
   }
 
+  private tryFindObject(
+    typeName: string,
+    type: ValueWrapper,
+  ): ValueWrapper | undefined {
+    const targets = this.getFindObjectTargets();
+    this.plugin.diag("objects.findByType single candidates", {
+      typeName,
+      count: targets.length,
+      targets,
+    });
+    const argVariants = [[type], [type, 0], [type, 1], [type, 0, 0]];
+    for (const args of argVariants) {
+      const direct = this.tryCallPointerDirectWithDiag(
+        targets,
+        args,
+        "objects.findByType single direct",
+        typeName,
+      );
+      if (direct) return direct;
+      const managed = this.tryCallManagedReturnWithDiag(
+        targets,
+        args,
+        "objects.findByType single managed",
+        typeName,
+      );
+      if (managed) return managed;
+    }
+    return undefined;
+  }
+
   private getFindObjectsTargets() {
     const dynamicMethods = this.plugin
       .findMethods("FindObjects")
@@ -3388,6 +3448,46 @@ class ObjectQueryApi {
     if (name.startsWith("FindObjectsByType")) return 1;
     if (name.startsWith("FindObjectsOfType")) return 2;
     return 10;
+  }
+
+  private getFindObjectTargets() {
+    const dynamicMethods = this.plugin
+      .findMethods("FindObject")
+      .filter(
+        (method) =>
+          (method.typeName === "UnityEngine.Object" ||
+            method.typeName.endsWith(".Object")) &&
+          method.name.startsWith("FindObject") &&
+          !method.name.startsWith("FindObjects"),
+      )
+      .sort((a, b) => this.rankFindObjectMethod(a.name) - this.rankFindObjectMethod(b.name));
+    this.plugin.diag("objects.findByType single method metadata", dynamicMethods);
+    const dynamicTargets = dynamicMethods
+      .map((method) => `${method.typeName}$$${method.name}`);
+
+    const fallbackTargets = [
+      "UnityEngine.Object$$FindObjectOfType",
+      "UnityEngine.Object$$FindObjectOfType_0",
+    ];
+
+    return [...new Set([...dynamicTargets, ...fallbackTargets])];
+  }
+
+  private rankFindObjectMethod(name: string) {
+    if (name.startsWith("FindObjectOfType")) return 0;
+    if (name.startsWith("FindFirstObjectByType")) return 1;
+    if (name.startsWith("FindAnyObjectByType")) return 2;
+    return 10;
+  }
+
+  private typeString(targets: string[], type: ValueWrapper | number): string | null {
+    const result = this.tryCall(targets, [type, 0]);
+    if (!result || result.val() <= 0) return null;
+    try {
+      return result.mstr();
+    } catch {
+      return null;
+    }
   }
 
   private tryCallPointerDirectWithDiag(

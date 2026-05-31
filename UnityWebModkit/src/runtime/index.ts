@@ -3575,8 +3575,9 @@ class ObjectQueryApi {
             target,
             args: normalizedArgs,
             result: thrownPointer,
+            accepted: false,
           });
-          return new ValueWrapper(thrownPointer);
+          continue;
         }
         this.plugin.diag(`${label} failed`, {
           typeName,

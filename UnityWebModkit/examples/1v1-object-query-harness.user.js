@@ -9,7 +9,7 @@
 // @grant       GM_xmlhttpRequest
 // @connect     127.0.0.1
 // @connect     localhost
-// @require     https://raw.githubusercontent.com/ruomiop/NextUWMK/refs/heads/main/UnityWebModkit/dist/unity-web-modkit.0a430a9299dd921c221b.js
+// @require     https://raw.githubusercontent.com/ruomiop/NextUWMK/refs/heads/main/UnityWebModkit/dist/unity-web-modkit.c6b5ff5cc3bfe7c25914.js
 // ==/UserScript==
 
 (function () {
@@ -113,6 +113,20 @@
 
   function runObjectQuerySmoke(ctx) {
     info("metadata", "loaded", ctx.metadata);
+
+    runStep("methods.typeHandle", () => ({
+      getTypeFromHandle: ctx.findMethods("GetTypeFromHandle"),
+      internalFromHandle: ctx.findMethods("internal_from_handle"),
+      typeGetType: ctx.findMethods("GetType").filter((m) => m.typeName === "System.Type"),
+    }));
+
+    runStep("methods.objectQuery", () => ({
+      findObject: ctx.findMethods("FindObject"),
+      findObjects: ctx.findMethods("FindObjects"),
+      getTransform: ctx.findMethods("get_transform"),
+      getGameObject: ctx.findMethods("get_gameObject"),
+      getName: ctx.findMethods("get_name"),
+    }));
 
     const gameObjectType = runStep("type.gameObject", () =>
       ctx.objects.resolveType("UnityEngine.GameObject"),

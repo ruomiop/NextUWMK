@@ -2667,7 +2667,7 @@ class ObjectQueryApi {
     };
     for (const name of names) {
       const namePtr = this.plugin.createMstr(name);
-      const result = this.tryCallVariants(
+      const result = this.tryCallManagedReturnVariants(
         [
           "System.Type$$GetType",
           "System.Type$$GetType_317",
@@ -2690,58 +2690,51 @@ class ObjectQueryApi {
         metadataType.typeIndex,
       );
       if (!typeAddress) continue;
-      const handleAttempts = this.getHandleTypeAttempts(typeAddress);
-      try {
-        for (const attempt of handleAttempts.attempts) {
-          const result = this.tryCall(attempt.methods, attempt.args);
-          trace.handleResults.push({
-            typeIndex: metadataType.typeIndex,
-            runtimeTypeIndex: metadataType.runtimeTypeIndex,
-            typeAddress,
-            method: attempt.methods[0],
-            mode: attempt.mode,
-            result: result?.val() ?? 0,
-          });
-          if (result && result.val() > 0) {
-            trace.result = result.val();
-            return trace;
-          }
+      for (const attempt of this.getHandleTypeAttempts(typeAddress)) {
+        const result = this.tryCallManagedReturn(
+          attempt.methods,
+          attempt.args,
+        );
+        trace.handleResults.push({
+          typeIndex: metadataType.typeIndex,
+          runtimeTypeIndex: metadataType.runtimeTypeIndex,
+          typeAddress,
+          method: attempt.methods[0],
+          mode: attempt.mode,
+          result: result?.val() ?? 0,
+        });
+        if (result && result.val() > 0) {
+          trace.result = result.val();
+          return trace;
         }
-      } finally {
-        handleAttempts.dispose();
       }
     }
     return trace;
   }
 
   private getHandleTypeAttempts(typeAddress: number) {
-    const runtimeHandle = this.plugin.alloc(4);
-    runtimeHandle.writeField(0, "u32", typeAddress);
-    return {
-      attempts: [
-        {
-          methods: ["System.Type$$GetTypeFromHandle"],
-          args: [typeAddress],
-          mode: "direct",
-        },
-        {
-          methods: ["System.Type$$internal_from_handle"],
-          args: [typeAddress],
-          mode: "direct",
-        },
-        {
-          methods: ["System.Type$$GetTypeFromHandle"],
-          args: [runtimeHandle],
-          mode: "runtime-handle-pointer",
-        },
-        {
-          methods: ["System.Type$$internal_from_handle"],
-          args: [runtimeHandle],
-          mode: "runtime-handle-pointer",
-        },
-      ],
-      dispose: () => runtimeHandle.dispose(),
-    };
+    return [
+      {
+        methods: ["System.Type$$GetTypeFromHandle"],
+        args: [typeAddress, 0],
+        mode: "sret-direct",
+      },
+      {
+        methods: ["System.Type$$internal_from_handle"],
+        args: [typeAddress, 0],
+        mode: "sret-direct",
+      },
+      {
+        methods: ["System.Type$$GetTypeFromHandle"],
+        args: [typeAddress],
+        mode: "sret-direct-short",
+      },
+      {
+        methods: ["System.Type$$internal_from_handle"],
+        args: [typeAddress],
+        mode: "sret-direct-short",
+      },
+    ];
   }
 
   public findByType(typeName: string): ValueWrapper[] {
@@ -2896,12 +2889,43 @@ class ObjectQueryApi {
     return undefined;
   }
 
+  private tryCallManagedReturn(
+    targets: string[],
+    args: any[],
+  ): ValueWrapper | undefined {
+    for (const target of targets) {
+      const result = this.plugin.alloc(4);
+      try {
+        result.writeField(0, "u32", 0);
+        this.plugin.call(target, [result, ...args]);
+        const ptr = result.readField(0, "u32")?.val() ?? 0;
+        if (ptr > 0) return new ValueWrapper(ptr);
+      } catch {
+        // Try the next overload/name variant.
+      } finally {
+        result.dispose();
+      }
+    }
+    return undefined;
+  }
+
   private tryCallVariants(
     targets: string[],
     argVariants: any[][],
   ): ValueWrapper | undefined {
     for (const args of argVariants) {
       const result = this.tryCall(targets, args);
+      if (result) return result;
+    }
+    return undefined;
+  }
+
+  private tryCallManagedReturnVariants(
+    targets: string[],
+    argVariants: any[][],
+  ): ValueWrapper | undefined {
+    for (const args of argVariants) {
+      const result = this.tryCallManagedReturn(targets, args);
       if (result) return result;
     }
     return undefined;

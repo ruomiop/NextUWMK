@@ -35,7 +35,7 @@ Compared with the original UnityWebModkit base, this version adds or updates:
 - Object query type lookup can now resolve metadata type indices through IL2CPP runtime type handles when string-based `System.Type.GetType` returns nothing.
 - Added `plugin.objects.resolveType(typeName)` to trace string and metadata-handle type resolution paths.
 - Object query metadata-handle lookup now uses the scanned global metadata registration and maps type definitions through `byvalTypeIndex`, fixing Unity/game type resolution when module-local registration data is incomplete.
-- Object query type tracing now tries both `Type.GetTypeFromHandle` and `Type.internal_from_handle` with direct and struct-pointer handle arguments for IL2CPP builds with different `RuntimeTypeHandle` ABIs.
+- Object query type tracing now calls managed `System.Type` helpers through their IL2CPP out-pointer return ABI, fixing lookups for methods that compile to void wasm functions with an explicit return slot.
 - Runtime calls can now use a remembered wasm module fallback before Unity exposes `unityInstance`, allowing early `onLoaded` object queries to allocate/call safely.
 - Unity web data cache probing now retries briefly during startup to avoid races where UnityCache is populated just after UWMK's first probe.
 - Metadata cache entries now carry a schema version and preserve runtime indices used by IL2CPP context reconstruction.

@@ -108,15 +108,24 @@ function loadWebDataFromIndexedDb(
     request.onsuccess = (event: any) => {
       const db = event.target.result;
       const objectStores = Array.from(db.objectStoreNames as any) as string[];
-      logger.info("[DIAG] indexedDB stores %o", {
-        databaseName,
-        objectStores,
-      });
-      const storesToProbe = objectStores.includes("RequestStore")
+      const preferredStores = objectStores.includes("RequestStore")
         ? ["RequestStore"]
         : objectStores.filter((name) =>
-            /request|xhr|xmlhttprequest|data/i.test(name),
+            /request|xhr|xmlhttprequest|data|cache|store|response|entry|file/i.test(
+              name,
+            ),
           );
+      const storesToProbe =
+        preferredStores.length > 0 ? preferredStores : objectStores;
+      logger.info(
+        "[DIAG] indexedDB stores %s",
+        JSON.stringify({
+          databaseName,
+          objectStores,
+          storesToProbe,
+          usedFallbackAllStores: preferredStores.length === 0,
+        }),
+      );
 
       if (storesToProbe.length === 0) {
         logger.info("[DIAG] indexedDB no probe stores %s", databaseName);
@@ -141,9 +150,14 @@ function loadWebDataFromIndexedDb(
             .transaction([storeName], "readonly")
             .objectStore(storeName)
             .getAll();
-        } catch {
+        } catch (err) {
+          logger.info("[DIAG] indexedDB store probe failed %o", {
+            databaseName,
+            storeName,
+            error: err,
+          });
           finishStore();
-          return;
+          continue;
         }
         requestCacheEntries.onsuccess = async (event: any) => {
           const entries = event.target.result;
@@ -165,6 +179,12 @@ function loadWebDataFromIndexedDb(
                 `${databaseName} indexedDB ${storeName}`,
               );
               if (parsed) {
+                logger.info("[DIAG] indexedDB parsed Unity web data %o", {
+                  databaseName,
+                  storeName,
+                  byteLength: data.byteLength,
+                  nodes: parsed.nodes.length,
+                });
                 page.__UnityWebModkitWebData = parsed;
                 notifyWebDataCallbacks(parsed);
                 db.close();
@@ -515,7 +535,21 @@ async function tryParseWebData(
   source: string,
 ): Promise<WebData | undefined> {
   data = await decompressUnityWebData(data, source);
-  if (!isPotentialWebData(data)) return undefined;
+  if (!isPotentialWebData(data)) {
+    if (source.includes("indexedDB") || source.includes("intercepted XHR")) {
+      const head = Array.from(
+        new Uint8Array(data, 0, Math.min(16, data.byteLength)),
+      )
+        .map((byte) => byte.toString(16).padStart(2, "0"))
+        .join(" ");
+      logger.info("[DIAG] Unity web data parse skipped %o", {
+        source,
+        byteLength: data.byteLength,
+        head,
+      });
+    }
+    return undefined;
+  }
   try {
     return parseWebData(data);
   } catch (err) {

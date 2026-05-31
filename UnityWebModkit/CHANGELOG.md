@@ -25,6 +25,7 @@ Compared with the original UnityWebModkit base, this version adds or updates:
   - managed field layout computation when field offset tables are missing.
   - managed field layout fallback is now also used per missing field, so partially populated field offset tables no longer leave game script classes at `-1`.
 - `ValueWrapper.mstr()` now reads IL2CPP managed string length from the object header instead of scanning for a null terminator, preventing runaway reads on non-null-terminated strings.
+- IL2CPP context cache entries now carry a schema version so browsers do not reuse stale field offset data after parser fixes.
 - Full type-name candidate lookup for field reads, allowing short names and namespace-qualified names.
 - Field discovery helpers:
   - `plugin.listFields()`

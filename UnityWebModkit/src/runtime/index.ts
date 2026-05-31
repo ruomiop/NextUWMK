@@ -1856,6 +1856,32 @@ export class Runtime {
     );
   }
 
+  public getWasmTable(module?: any): WebAssembly.Table | undefined {
+    const page = getPageWindow();
+    const asmCandidates = [
+      module?.asm,
+      this.wasmExports,
+      page?.Module?.asm,
+    ].filter(Boolean);
+
+    for (const asm of asmCandidates) {
+      const preferred = this.tableName ? asm[this.tableName] : undefined;
+      if (preferred && typeof preferred.get === "function") return preferred;
+
+      const tableName = Object.keys(asm).find(
+        (key) => asm[key]?.constructor?.name === "Table",
+      );
+      if (!tableName) continue;
+      const table = asm[tableName];
+      if (table && typeof table.get === "function") {
+        this.tableName = tableName;
+        return table;
+      }
+    }
+
+    return undefined;
+  }
+
   public getUnityInstance(): any {
     // @ts-ignore Support common Unity WebGL loader globals.
     const page = getPageWindow();
@@ -2619,9 +2645,10 @@ class ModkitPlugin {
     args?: any[],
   ) {
     const _game = this._runtime.getUnityInstance();
-    const tableName: string =
-      this._runtime.tableName ||
-      this._runtime.resolveTableName(_game.Module.asm);
+    const table = this._runtime.getWasmTable(_game.Module);
+    if (!table) {
+      throw new Error("Failed to invoke function! Wasm table not found.");
+    }
     if (typeof targetMethodOrArgs === "string") {
       const tableIndex = this._runtime.getTableIndex(
         target,
@@ -2637,9 +2664,7 @@ class ModkitPlugin {
         args = args.map((arg) =>
           arg instanceof ValueWrapper ? arg.val() : arg,
         );
-      const result = _game.Module.asm[tableName].get(tableIndex)(
-        ...(args as any[]),
-      );
+      const result = table.get(tableIndex)(...(args as any[]));
       return new ValueWrapper(result);
     } else if (
       typeof targetMethodOrArgs === "object" ||
@@ -2657,9 +2682,7 @@ class ModkitPlugin {
       targetMethodOrArgs = targetMethodOrArgs.map((arg) =>
         arg instanceof ValueWrapper ? arg.val() : arg,
       );
-      const result = _game.Module.asm[tableName].get(tableIndex)(
-        ...(targetMethodOrArgs as any[]),
-      );
+      const result = table.get(tableIndex)(...(targetMethodOrArgs as any[]));
       return new ValueWrapper(result);
     }
   }

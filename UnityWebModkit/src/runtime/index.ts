@@ -1966,12 +1966,25 @@ export class Runtime {
       hasTable: Boolean(this.wasmTable),
       tableLength: this.wasmTable?.length || 0,
       tableName: this.tableName,
+      hasExportedMemory: this.findWasmMemory(this.wasmExports) !== undefined,
+      hasImportedMemory: Boolean((importObject as any)?.env?.memory),
     });
     this.wasmMemory =
       this.wasmMemory ||
-      ((importObject as any)?.env?.memory as WebAssembly.Memory | undefined);
+      ((importObject as any)?.env?.memory as WebAssembly.Memory | undefined) ||
+      this.findWasmMemory(this.wasmExports);
     this.wasmModule = this.createWasmModuleFallback();
     this.publishUnityInstanceFallback();
+  }
+
+  private findWasmMemory(source: any): WebAssembly.Memory | undefined {
+    if (!source || typeof source !== "object") return undefined;
+    for (const value of Object.values(source)) {
+      if (value instanceof getPageWindow().WebAssembly.Memory) {
+        return value as WebAssembly.Memory;
+      }
+    }
+    return undefined;
   }
 
   private publishUnityInstanceFallback() {

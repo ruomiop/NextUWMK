@@ -1921,7 +1921,35 @@ export class Runtime {
     const candidate = this.getPageUnityInstanceCandidate();
     if (!candidate && this.wasmModule) return { Module: this.wasmModule };
     if (!candidate) throw new Error("Unable to locate Unity WebGL instance");
-    return candidate;
+    return this.withWasmModuleFallback(candidate);
+  }
+
+  private withWasmModuleFallback(candidate: any) {
+    const fallback = this.wasmModule;
+    const module = candidate?.Module;
+    if (!fallback || !module) return candidate;
+    if (module.HEAPU8 && module.asm) return candidate;
+
+    const normalizedModule = Object.create(module);
+    Object.defineProperty(normalizedModule, "HEAPU8", {
+      configurable: true,
+      enumerable: true,
+      get() {
+        return module.HEAPU8 || fallback.HEAPU8;
+      },
+    });
+    Object.defineProperty(normalizedModule, "asm", {
+      configurable: true,
+      enumerable: true,
+      get() {
+        return module.asm || fallback.asm;
+      },
+    });
+
+    return {
+      ...candidate,
+      Module: normalizedModule,
+    };
   }
 
   private rememberWasmExports(

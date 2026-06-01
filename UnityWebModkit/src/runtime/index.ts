@@ -3657,6 +3657,7 @@ class ObjectQueryApi {
       .findMethods(`get_${propertyName}`)
       .filter(
         (method) =>
+          method.typeName === "System.RuntimeType" ||
           method.typeName === "System.Type" ||
           method.typeName === "System.Reflection.MemberInfo",
       )

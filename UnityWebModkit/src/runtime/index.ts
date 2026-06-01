@@ -3014,7 +3014,13 @@ type TypeResolutionTrace = {
     runtimeTypeIndex?: number;
     typeAddress?: number;
   }>;
-  stringResults: Array<{ name: string; result: number }>;
+  stringResults: Array<{
+    name: string;
+    result: number;
+    resultName?: string | null;
+    resultFullName?: string | null;
+    accepted?: boolean;
+  }>;
   handleResults: Array<{
     typeIndex?: number;
     runtimeTypeIndex?: number;
@@ -3148,7 +3154,13 @@ class ObjectQueryApi {
             this.isResolvedTypeMatch(metadataType, typeName, resultName, resultFullName),
           )
         : this.isResolvedTypeMatch({ typeName }, typeName, resultName, resultFullName);
-      trace.stringResults.push({ name, result: resultValue });
+      trace.stringResults.push({
+        name,
+        result: resultValue,
+        resultName,
+        resultFullName,
+        accepted,
+      });
       this.plugin.diag("objects.resolveType string result", {
         name,
         result: resultValue,
@@ -3472,21 +3484,40 @@ class ObjectQueryApi {
   private tryCallReturn(
     targets: string[],
     args: any[],
+    diagLabel?: string,
   ): ValueWrapper | undefined {
-    const direct = this.tryCallPointerDirect(targets, args);
+    const direct = this.tryCallPointerDirect(targets, args, diagLabel);
     if (direct) return direct;
-    return this.tryCallManagedReturn(targets, args);
+    return this.tryCallManagedReturn(targets, args, diagLabel);
   }
 
   private tryCallPointerDirect(
     targets: string[],
     args: any[],
+    diagLabel?: string,
   ): ValueWrapper | undefined {
     for (const target of targets) {
+      const normalizedArgs = args.map((arg) =>
+        arg instanceof ValueWrapper ? arg.val() : arg,
+      );
       try {
         const result = this.plugin.call(target, args);
+        if (diagLabel) {
+          this.plugin.diag(`${diagLabel} direct`, {
+            target,
+            args: normalizedArgs,
+            result: result?.val() ?? 0,
+          });
+        }
         if (result && this.isLikelyPointer(result.val())) return result;
-      } catch {
+      } catch (err) {
+        if (diagLabel) {
+          this.plugin.diag(`${diagLabel} direct failed`, {
+            target,
+            args: normalizedArgs,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
         // Try the next overload/name variant.
       }
     }
@@ -3496,13 +3527,24 @@ class ObjectQueryApi {
   private tryCallManagedReturn(
     targets: string[],
     args: any[],
+    diagLabel?: string,
   ): ValueWrapper | undefined {
     for (const target of targets) {
+      const normalizedArgs = args.map((arg) =>
+        arg instanceof ValueWrapper ? arg.val() : arg,
+      );
       const result = this.plugin.alloc(4);
       try {
         result.writeField(0, "u32", 0);
         this.plugin.call(target, [result, ...args]);
         const ptr = result.readField(0, "u32")?.val() ?? 0;
+        if (diagLabel) {
+          this.plugin.diag(`${diagLabel} managed`, {
+            target,
+            args: normalizedArgs,
+            result: ptr,
+          });
+        }
         if (this.isLikelyPointer(ptr)) return new ValueWrapper(ptr);
       } catch (err) {
         this.plugin.diag("managed return call failed", {
@@ -3643,11 +3685,31 @@ class ObjectQueryApi {
   }
 
   private typeString(targets: string[], type: ValueWrapper | number): string | null {
-    const result = this.tryCallReturnVariants(targets, [[type], [type, 0]]);
+    const normalizedType = this.ptr(type);
+    this.plugin.diag("objects.typeString start", {
+      type: normalizedType,
+      targets,
+    });
+    const result = this.tryCallReturnVariants(
+      targets,
+      [[type], [type, 0]],
+      "objects.typeString",
+    );
     if (!result || result.val() <= 0) return null;
     try {
-      return result.mstr();
-    } catch {
+      const value = result.mstr();
+      this.plugin.diag("objects.typeString decoded", {
+        type: normalizedType,
+        result: result.val(),
+        value,
+      });
+      return value;
+    } catch (err) {
+      this.plugin.diag("objects.typeString decode failed", {
+        type: normalizedType,
+        result: result.val(),
+        error: err instanceof Error ? err.message : String(err),
+      });
       return null;
     }
   }
@@ -3756,9 +3818,10 @@ class ObjectQueryApi {
   private tryCallReturnVariants(
     targets: string[],
     argVariants: any[][],
+    diagLabel?: string,
   ): ValueWrapper | undefined {
     for (const args of argVariants) {
-      const result = this.tryCallReturn(targets, args);
+      const result = this.tryCallReturn(targets, args, diagLabel);
       if (result) return result;
     }
     return undefined;

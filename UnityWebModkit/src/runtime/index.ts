@@ -3023,6 +3023,9 @@ type TypeResolutionTrace = {
     mode?: string;
     args?: any[];
     result: number;
+    name?: string | null;
+    fullName?: string | null;
+    accepted?: boolean;
   }>;
   result?: number;
 };
@@ -3077,6 +3080,14 @@ class ObjectQueryApi {
           mode: attempt.mode,
         });
         const result = this.tryCallHandleTypeAttempt(attempt);
+        const resultValue = result?.val() ?? 0;
+        const name = result && this.isLikelyPointer(resultValue)
+          ? this.runtimeTypeName(result)
+          : null;
+        const fullName = result && this.isLikelyPointer(resultValue)
+          ? this.runtimeTypeFullName(result)
+          : null;
+        const accepted = this.isResolvedTypeMatch(metadataType, typeName, name, fullName);
         trace.handleResults.push({
           typeIndex: metadataType.typeIndex,
           runtimeTypeIndex: metadataType.runtimeTypeIndex,
@@ -3084,21 +3095,27 @@ class ObjectQueryApi {
           method: attempt.methods[0],
           mode: attempt.mode,
           args: this.formatDiagArgs(attempt.args),
-          result: result?.val() ?? 0,
+          result: resultValue,
+          name,
+          fullName,
+          accepted,
         });
         this.plugin.diag("objects.resolveType handle result", {
           typeName,
           method: attempt.methods[0],
           mode: attempt.mode,
           args: this.formatDiagArgs(attempt.args),
-          result: result?.val() ?? 0,
+          result: resultValue,
+          name,
+          fullName,
+          accepted,
         });
         if (
           result &&
-          this.isLikelyPointer(result.val()) &&
-          !attempt.mode.startsWith("raw-direct")
+          this.isLikelyPointer(resultValue) &&
+          accepted
         ) {
-          trace.result = result.val();
+          trace.result = resultValue;
           this.plugin.diag("objects.resolveType success", trace);
           return trace;
         }
@@ -3119,13 +3136,28 @@ class ObjectQueryApi {
         ],
         [[namePtr], [namePtr, 0], [namePtr, 0, 0]],
       );
-      trace.stringResults.push({ name, result: result?.val() ?? 0 });
+      const resultValue = result?.val() ?? 0;
+      const resultName = result && this.isLikelyPointer(resultValue)
+        ? this.runtimeTypeName(result)
+        : null;
+      const resultFullName = result && this.isLikelyPointer(resultValue)
+        ? this.runtimeTypeFullName(result)
+        : null;
+      const accepted = metadataTypes.length > 0
+        ? metadataTypes.some((metadataType) =>
+            this.isResolvedTypeMatch(metadataType, typeName, resultName, resultFullName),
+          )
+        : this.isResolvedTypeMatch({ typeName }, typeName, resultName, resultFullName);
+      trace.stringResults.push({ name, result: resultValue });
       this.plugin.diag("objects.resolveType string result", {
         name,
-        result: result?.val() ?? 0,
+        result: resultValue,
+        resultName,
+        resultFullName,
+        accepted,
       });
-      if (result && this.isLikelyPointer(result.val())) {
-        trace.result = result.val();
+      if (result && this.isLikelyPointer(resultValue) && accepted) {
+        trace.result = resultValue;
         this.plugin.diag("objects.resolveType success", trace);
         return trace;
       }
@@ -3181,7 +3213,31 @@ class ObjectQueryApi {
         args: [typeAddress],
         mode: "raw-direct-diag",
       },
+      {
+        methods: ["System.Type$$GetTypeFromHandle"],
+        args: [typeAddress, 0],
+        mode: "raw-direct-extra-diag",
+      },
     ];
+  }
+
+  private isResolvedTypeMatch(
+    metadataType: { typeName: string; assemblyName?: string; imageName?: string },
+    query: string,
+    name: string | null,
+    fullName: string | null,
+  ) {
+    const expectedFullName = metadataType.typeName;
+    const expectedName = expectedFullName.split(".").pop() || expectedFullName;
+    const queryName = query.split(".").pop() || query;
+    return (
+      name === expectedName ||
+      name === expectedFullName ||
+      name === query ||
+      name === queryName ||
+      fullName === expectedFullName ||
+      fullName === query
+    );
   }
 
   private tryCallHandleTypeAttempt(attempt: {

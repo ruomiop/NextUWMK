@@ -77,6 +77,37 @@
     }).catch(() => {});
   }
 
+  function installDiagForwarder() {
+    const targetConsole = root.console || console;
+    if (!targetConsole || targetConsole.__uwmkHarnessDiagForwarder) return;
+
+    const methods = ["log", "info", "warn", "error", "debug"];
+    for (const method of methods) {
+      const original = targetConsole[method];
+      if (typeof original !== "function") continue;
+
+      targetConsole[method] = function (...args) {
+        original.apply(this, args);
+        try {
+          const text = args.map((arg) => String(arg)).join(" ");
+          if (!text.includes("[DIAG]")) return;
+          post(method === "error" ? "error" : method === "warn" ? "warn" : "info", "uwmk.diag", method, {
+            args: args.map((arg) => simplify(arg)),
+          });
+        } catch {
+          // Keep console forwarding best-effort.
+        }
+      };
+    }
+
+    Object.defineProperty(targetConsole, "__uwmkHarnessDiagForwarder", {
+      value: true,
+      configurable: true,
+    });
+  }
+
+  installDiagForwarder();
+
   function info(stage, message, data) {
     console.log(`[ObjectQueryHarness] ${stage}: ${message}`, data || "");
     post("info", stage, message, data);

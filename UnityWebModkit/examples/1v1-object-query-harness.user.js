@@ -77,8 +77,9 @@
     }).catch(() => {});
   }
 
-  function installDiagForwarder() {
-    const targetConsole = root.console || console;
+  const HARNESS_BUILD = "diag-forwarder-v2";
+
+  function installDiagForwarder(targetConsole, label) {
     if (!targetConsole || targetConsole.__uwmkHarnessDiagForwarder) return;
 
     const methods = ["log", "info", "warn", "error", "debug"];
@@ -92,6 +93,7 @@
           const text = args.map((arg) => String(arg)).join(" ");
           if (!text.includes("[DIAG]")) return;
           post(method === "error" ? "error" : method === "warn" ? "warn" : "info", "uwmk.diag", method, {
+            console: label,
             args: args.map((arg) => simplify(arg)),
           });
         } catch {
@@ -106,7 +108,8 @@
     });
   }
 
-  installDiagForwarder();
+  installDiagForwarder(console, "sandbox");
+  installDiagForwarder(root.console, "page");
 
   function info(stage, message, data) {
     console.log(`[ObjectQueryHarness] ${stage}: ${message}`, data || "");
@@ -143,6 +146,12 @@
   }
 
   function runObjectQuerySmoke(ctx) {
+    info("harness", "build", {
+      build: HARNESS_BUILD,
+      hasSandboxForwarder: Boolean(console.__uwmkHarnessDiagForwarder),
+      hasPageForwarder: Boolean(root.console && root.console.__uwmkHarnessDiagForwarder),
+    });
+
     info("metadata", "loaded", ctx.metadata);
 
     runStep("methods.typeHandle", () => ({

@@ -1971,6 +1971,22 @@ export class Runtime {
       this.wasmMemory ||
       ((importObject as any)?.env?.memory as WebAssembly.Memory | undefined);
     this.wasmModule = this.createWasmModuleFallback();
+    this.publishUnityInstanceFallback();
+  }
+
+  private publishUnityInstanceFallback() {
+    const page = getPageWindow();
+    const candidate = this.getPageUnityInstanceCandidate();
+    const instance = candidate
+      ? this.withWasmModuleFallback(candidate)
+      : { Module: this.wasmModule };
+    page.__UnityWebModkitUnityInstance = instance;
+    this.diag("unity instance fallback published", {
+      hasCandidate: Boolean(candidate),
+      hasModule: Boolean(instance?.Module),
+      hasHeap: Boolean(instance?.Module?.HEAPU8),
+      hasAsm: Boolean(instance?.Module?.asm),
+    });
   }
 
   private createWasmModuleFallback() {

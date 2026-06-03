@@ -899,6 +899,7 @@ export class Runtime {
         const replacementFuncIndexes: WailVariable[] = [];
         const oldFuncIndexes: WailVariable[] = [];
         const patchedHooks: Hook[] = [];
+        const hookRewriteCounts: number[] = [];
         var i = 0,
           pluginLen = this.plugins.length;
         while (i < pluginLen) {
@@ -1002,6 +1003,17 @@ export class Runtime {
                   JSON.stringify(useHook.params) &&
                 type.returnType === useHook.returnType,
             );
+            if (injectType < 0) {
+              this.logger.warn(
+                "Skipping hook %s.%s: unable to resolve wasm signature",
+                useHook.typeName,
+                useHook.methodName,
+              );
+              useHook.enabled = false;
+              useHook.applied = true;
+              ++j;
+              continue;
+            }
             const replacementFuncIndex = wail.addImportEntry({
               moduleStr: "env",
               fieldStr: injectName,
@@ -1016,6 +1028,18 @@ export class Runtime {
               kind: "func",
             });
             patchedHooks.push(useHook);
+            hookRewriteCounts.push(0);
+            this.diag("hook.direct prepared", {
+              typeName: useHook.typeName,
+              methodName: useHook.methodName,
+              tableIndex: useHook.tableIndex,
+              internalIndex: useHook.index,
+              oldFuncIndex: oldFuncIndex.i32(),
+              replacementFuncIndex: replacementFuncIndex.i32(),
+              injectType,
+              params: useHook.params,
+              returnType: useHook.returnType,
+            });
             ++j;
           }
           ++i;
@@ -1029,6 +1053,8 @@ export class Runtime {
             const workingIndex = mappedOldFuncIndexes.indexOf(callTarget);
             const workingHook = patchedHooks[workingIndex];
             if (workingHook) workingHook.applied = true;
+            hookRewriteCounts[workingIndex] =
+              (hookRewriteCounts[workingIndex] || 0) + 1;
             return new Uint8Array([
               opcode,
               ...VarUint32ToArray(replacementFuncIndexes[workingIndex].i32()),
@@ -1037,6 +1063,17 @@ export class Runtime {
           return instrBytes;
         });
         wail.parse();
+        patchedHooks.forEach((hook, index) => {
+          this.diag("hook.direct rewrite summary", {
+            typeName: hook.typeName,
+            methodName: hook.methodName,
+            tableIndex: hook.tableIndex,
+            internalIndex: hook.index,
+            oldFuncIndex: oldFuncIndexes[index]?.i32(),
+            replacementFuncIndex: replacementFuncIndexes[index]?.i32(),
+            rewriteCount: hookRewriteCounts[index] || 0,
+          });
+        });
         this.instantiate(wail.write(), importObject).then(
           (instantiatedSource: WebAssembly.WebAssemblyInstantiatedSource) => {
             this.rememberWasmExports(instantiatedSource, importObject);

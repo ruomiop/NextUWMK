@@ -3016,6 +3016,9 @@ type TypeResolutionTrace = {
   }>;
   stringResults: Array<{
     name: string;
+    method?: string;
+    mode?: string;
+    args?: any[];
     result: number;
     resultName?: string | null;
     resultFullName?: string | null;
@@ -3130,52 +3133,101 @@ class ObjectQueryApi {
     for (const name of names) {
       const namePtr = this.plugin.createMstr(name);
       this.plugin.diag("objects.resolveType try string", { typeName, name });
-      const result = this.tryCallReturnVariants(
-        [
-          "System.Type$$GetType",
-          "System.Type$$GetType_317",
-          "System.Type$$GetType_486",
-          "System.Type$$GetType_854",
-          "System.Type$$GetType_2232",
-          "System.Type$$GetType_4755",
-          "System.Type$$GetType_4757",
-        ],
-        [[namePtr], [namePtr, 0], [namePtr, 0, 0]],
-      );
-      const resultValue = result?.val() ?? 0;
-      const resultName = result && this.isLikelyPointer(resultValue)
-        ? this.runtimeTypeName(result)
-        : null;
-      const resultFullName = result && this.isLikelyPointer(resultValue)
-        ? this.runtimeTypeFullName(result)
-        : null;
-      const accepted = metadataTypes.length > 0
-        ? metadataTypes.some((metadataType) =>
-            this.isResolvedTypeMatch(metadataType, typeName, resultName, resultFullName),
-          )
-        : this.isResolvedTypeMatch({ typeName }, typeName, resultName, resultFullName);
-      trace.stringResults.push({
-        name,
-        result: resultValue,
-        resultName,
-        resultFullName,
-        accepted,
-      });
-      this.plugin.diag("objects.resolveType string result", {
-        name,
-        result: resultValue,
-        resultName,
-        resultFullName,
-        accepted,
-      });
-      if (result && this.isLikelyPointer(resultValue) && accepted) {
-        trace.result = resultValue;
-        this.plugin.diag("objects.resolveType success", trace);
-        return trace;
+      for (const attempt of this.getStringTypeAttempts(namePtr)) {
+        this.plugin.diag("objects.resolveType try string method", {
+          typeName,
+          name,
+          method: attempt.methods[0],
+          mode: attempt.mode,
+          args: this.formatDiagArgs(attempt.args),
+        });
+        const result = this.tryCallStringTypeAttempt(attempt);
+        const resultValue = result?.val() ?? 0;
+        const resultName = result && this.isLikelyPointer(resultValue)
+          ? this.runtimeTypeName(result)
+          : null;
+        const resultFullName = result && this.isLikelyPointer(resultValue)
+          ? this.runtimeTypeFullName(result)
+          : null;
+        const accepted = metadataTypes.length > 0
+          ? metadataTypes.some((metadataType) =>
+              this.isResolvedTypeMatch(metadataType, typeName, resultName, resultFullName),
+            )
+          : this.isResolvedTypeMatch({ typeName }, typeName, resultName, resultFullName);
+        trace.stringResults.push({
+          name,
+          method: attempt.methods[0],
+          mode: attempt.mode,
+          args: this.formatDiagArgs(attempt.args),
+          result: resultValue,
+          resultName,
+          resultFullName,
+          accepted,
+        });
+        this.plugin.diag("objects.resolveType string result", {
+          name,
+          method: attempt.methods[0],
+          mode: attempt.mode,
+          args: this.formatDiagArgs(attempt.args),
+          result: resultValue,
+          resultName,
+          resultFullName,
+          accepted,
+        });
+        if (result && this.isLikelyPointer(resultValue) && accepted) {
+          trace.result = resultValue;
+          this.plugin.diag("objects.resolveType success", trace);
+          return trace;
+        }
       }
     }
     this.plugin.diag("objects.resolveType failed", trace);
     return trace;
+  }
+
+  private getStringTypeAttempts(namePtr: ValueWrapper) {
+    return [
+      {
+        methods: ["System.Type$$GetType_4757"],
+        args: [namePtr],
+        mode: "string-1-managed-return",
+      },
+      {
+        methods: ["System.Type$$GetType_2232"],
+        args: [namePtr, 0],
+        mode: "string-2-managed-return",
+      },
+      {
+        methods: ["System.Type$$GetType", "System.Type$$GetType_854"],
+        args: [namePtr, 0, 0],
+        mode: "string-3-managed-return",
+      },
+      {
+        methods: ["System.Type$$GetType_486"],
+        args: [namePtr, 0, 0, 0],
+        mode: "string-4-managed-return",
+      },
+      {
+        methods: ["System.Type$$GetType_317"],
+        args: [namePtr, 0, 0, 0, 0],
+        mode: "string-5-managed-return",
+      },
+      {
+        methods: ["System.Type$$GetType_4757"],
+        args: [namePtr],
+        mode: "string-1-direct",
+      },
+      {
+        methods: ["System.Type$$GetType_2232"],
+        args: [namePtr, 0],
+        mode: "string-2-direct",
+      },
+      {
+        methods: ["System.Type$$GetType", "System.Type$$GetType_854"],
+        args: [namePtr, 0, 0],
+        mode: "string-3-direct",
+      },
+    ];
   }
 
   private getHandleTypeAttempts(typeAddress: number) {
@@ -3268,6 +3320,17 @@ class ObjectQueryApi {
     }
     if (attempt.mode.startsWith("raw-direct")) {
       return this.tryCallPointerDirect(attempt.methods, attempt.args);
+    }
+    return this.tryCallPointerDirect(attempt.methods, attempt.args);
+  }
+
+  private tryCallStringTypeAttempt(attempt: {
+    methods: string[];
+    args: any[];
+    mode: string;
+  }): ValueWrapper | undefined {
+    if (attempt.mode.endsWith("managed-return")) {
+      return this.tryCallManagedReturn(attempt.methods, attempt.args);
     }
     return this.tryCallPointerDirect(attempt.methods, attempt.args);
   }
@@ -3690,11 +3753,9 @@ class ObjectQueryApi {
       type: normalizedType,
       targets,
     });
-    const result = this.tryCallReturnVariants(
-      targets,
-      [[type], [type, 0]],
-      "objects.typeString",
-    );
+    const result =
+      this.tryCallReturn(targets, [type], "objects.typeString") ??
+      this.tryCallReturn(targets, [type, 0], "objects.typeString fallback");
     if (!result || result.val() <= 0) return null;
     try {
       const value = result.mstr();

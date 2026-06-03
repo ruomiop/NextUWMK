@@ -9,7 +9,7 @@
 // @grant       GM_xmlhttpRequest
 // @connect     127.0.0.1
 // @connect     localhost
-// @require     https://raw.githubusercontent.com/ruomiop/NextUWMK/refs/heads/main/UnityWebModkit/dist/unity-web-modkit.6f14df5117bec936494b.js
+// @require     https://raw.githubusercontent.com/ruomiop/NextUWMK/refs/heads/main/UnityWebModkit/dist/unity-web-modkit.c6dd1a48ef79d3dbbfa8.js
 // ==/UserScript==
 
 (function () {

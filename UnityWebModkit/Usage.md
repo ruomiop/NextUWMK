@@ -19,6 +19,7 @@ const plugin = UWM.Runtime.createPlugin({
   referencedAssemblies: ["Assembly-CSharp.dll", "UnityEngine.CoreModule.dll"],
   preferIndirectHooks: false,
   globalName: "ctx",
+  diagnostics: false,
 });
 ```
 
@@ -29,6 +30,14 @@ Options:
 - `referencedAssemblies`: IL2CPP assemblies to parse. Add every assembly that contains classes or Unity APIs you want to call/hook.
 - `preferIndirectHooks`: when true, hooks are applied through indirect table wiring only.
 - `globalName`: optional page-global name, or array of names, used to expose the plugin for DevTools access. For example `globalName: "ctx"` exposes `window.ctx`.
+- `diagnostics`: optional boolean. When true, verbose `[DIAG]` runtime tracing is printed; when false or omitted, only normal lifecycle/errors/warnings are printed.
+
+You can also toggle diagnostics after plugin creation:
+
+```js
+plugin.setDiagnosticsEnabled(true);
+plugin.setDiagnosticsEnabled(false);
+```
 
 The most recently created plugin is also available as:
 

@@ -114,11 +114,16 @@ export class Runtime {
   }
 
   public createPlugin(opts: ModkitPluginOptions): ModkitPlugin {
+    const diagnostics = resolveDiagnosticsOption(opts);
+    if (diagnostics !== undefined) {
+      Logger.setDiagnosticsEnabled(diagnostics);
+    }
     if (!this.startedInitializing) this.initialize();
     this.diag("createPlugin", {
       name: opts.name,
       referencedAssemblies: opts.referencedAssemblies?.length || 0,
       globalName: opts.globalName,
+      diagnostics: Logger.getDiagnosticsEnabled(),
     });
     const plugin = new ModkitPlugin(
       opts.name,
@@ -2805,7 +2810,17 @@ type ModkitPluginOptions = {
   referencedAssemblies?: string[];
   preferIndirectHooks?: boolean;
   globalName?: string | string[];
+  diagnostics?: boolean;
+  showDiagnostics?: boolean;
+  diag?: boolean;
 };
+
+function resolveDiagnosticsOption(opts: ModkitPluginOptions) {
+  if (opts.diagnostics !== undefined) return opts.diagnostics;
+  if (opts.showDiagnostics !== undefined) return opts.showDiagnostics;
+  if (opts.diag !== undefined) return opts.diag;
+  return undefined;
+}
 
 class ModkitPlugin {
   public readonly name: string;
@@ -2863,6 +2878,14 @@ class ModkitPlugin {
       return;
     }
     this.logger.info("[DIAG] %s %o", message, data);
+  }
+
+  public setDiagnosticsEnabled(enabled: boolean) {
+    Logger.setDiagnosticsEnabled(enabled);
+  }
+
+  public getDiagnosticsEnabled() {
+    return Logger.getDiagnosticsEnabled();
   }
 
   public hookPrefix(target: HookInfo, callback: PrefixCallback): Hook {

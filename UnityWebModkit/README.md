@@ -77,6 +77,7 @@ The browser bundle is emitted into `dist/`.
     name: "example-plugin",
     version: "0.1.0",
     referencedAssemblies: ["Assembly-CSharp.dll", "UnityEngine.CoreModule.dll"],
+    diagnostics: false,
   });
 
   plugin.onLoaded = () => {

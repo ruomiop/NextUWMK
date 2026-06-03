@@ -9,10 +9,19 @@ export enum LogLevel {
 }
 
 export class Logger {
+  private static diagnosticsEnabled = false;
   private name: string;
 
   public constructor(name: string) {
     this.name = name;
+  }
+
+  public static setDiagnosticsEnabled(enabled: boolean): void {
+    Logger.diagnosticsEnabled = enabled;
+  }
+
+  public static getDiagnosticsEnabled(): boolean {
+    return Logger.diagnosticsEnabled;
   }
 
   public error(...args: any[]): void {
@@ -37,6 +46,9 @@ export class Logger {
 
   private log(level: LogLevel, ...args: any[]): void {
     if (this.shouldLog(level) && args.length > 0) {
+      if (this.isDiagnosticMessage(args[0]) && !Logger.diagnosticsEnabled) {
+        return;
+      }
       const logPrefix = `%c[${this.name}] %c[${LogLevel[level]}]%c`;
       let message = args.shift();
       if (typeof message !== "string") {
@@ -81,5 +93,9 @@ export class Logger {
       // @ts-ignore
       return DEVELOPMENT;
     return true;
+  }
+
+  private isDiagnosticMessage(message: any): boolean {
+    return typeof message === "string" && message.startsWith("[DIAG]");
   }
 }

@@ -1356,10 +1356,25 @@ export class Runtime {
           return originalResult?.val();
         };
 
-    table.set(
-      slot,
-      this.makeWasmFunc(hook.params, hookResults, jsImpl),
-    );
+    try {
+      table.set(
+        slot,
+        this.makeWasmFunc(hook.params, hookResults, jsImpl),
+      );
+    } catch (err) {
+      this.diag("hook.indirect table.set failed", {
+        typeName: hook.typeName,
+        methodName: hook.methodName,
+        tableName,
+        tableSource,
+        tableIndex: hook.tableIndex,
+        tableSlot: slot,
+        params: hook.params,
+        results: hookResults,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return false;
+    }
     hook.tableSlot = slot;
     hook.applied = true;
     this.diag("hook.indirect applied", {
@@ -1377,8 +1392,8 @@ export class Runtime {
   private resolveHookTableSlot(table: WebAssembly.Table, hook: Hook) {
     if (!this.isValidTableIndex(hook.tableIndex)) return undefined;
     const candidates = [
-      hook.tableIndex - 1,
       hook.tableIndex,
+      hook.tableIndex - 1,
     ].filter(
       (slot, index, slots) =>
         Number.isInteger(slot) &&

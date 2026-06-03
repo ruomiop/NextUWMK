@@ -804,7 +804,7 @@ export class Runtime {
         const hasBytecodePatches = this.plugins.some(
           (plugin) => plugin.bytecodePatches.length > 0,
         );
-        if (!cachedIl2CppFunctionCache || hasBytecodePatches) {
+        if (!cachedIl2CppFunctionCache || hasHooks || hasBytecodePatches) {
           const wailPreparser = new WailParser(bufferUint8Array);
           wailPreparser._optionalSectionFlags |= 1 << SECTION_CODE;
           wailPreparser._optionalSectionFlags |= 1 << SECTION_ELEMENT;
@@ -834,6 +834,7 @@ export class Runtime {
         if (
           cachedIl2CppFunctionCache &&
           Object.keys(this.candidateIl2CppFunctions).length === 0 &&
+          !hasHooks &&
           !hasBytecodePatches
         ) {
           const patchedBuffer = this.patchWasmExports(

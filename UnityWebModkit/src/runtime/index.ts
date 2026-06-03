@@ -1262,17 +1262,53 @@ export class Runtime {
     hook: Hook,
     tableName: string,
   ) {
-    if (!this.isValidTableIndex(hook.tableIndex)) return false;
+    if (!this.isValidTableIndex(hook.tableIndex)) {
+      this.diag("hook.indirect skipped invalid table index", {
+        typeName: hook.typeName,
+        methodName: hook.methodName,
+        tableIndex: hook.tableIndex,
+      });
+      return false;
+    }
     const table = (instantiatedSource as any).instance.exports[tableName];
     if (
       !table ||
       typeof table.get !== "function" ||
       typeof table.set !== "function"
-    )
+    ) {
+      this.diag("hook.indirect skipped missing table", {
+        typeName: hook.typeName,
+        methodName: hook.methodName,
+        tableName,
+        exports: Object.keys((instantiatedSource as any).instance.exports || {}),
+      });
       return false;
+    }
 
-    const originalFunc = table.get(hook.tableIndex);
-    if (typeof originalFunc !== "function") return false;
+    const slot = this.resolveHookTableSlot(table, hook);
+    if (slot === undefined) {
+      this.diag("hook.indirect skipped unresolved table slot", {
+        typeName: hook.typeName,
+        methodName: hook.methodName,
+        tableName,
+        tableIndex: hook.tableIndex,
+        tableLength: table.length,
+      });
+      return false;
+    }
+    const originalFunc = table.get(slot);
+    if (typeof originalFunc !== "function") {
+      this.diag("hook.indirect skipped non-function slot", {
+        typeName: hook.typeName,
+        methodName: hook.methodName,
+        tableName,
+        tableIndex: hook.tableIndex,
+        tableSlot: slot,
+        tableLength: table.length,
+        valueType: typeof originalFunc,
+      });
+      return false;
+    }
 
     const hookResults = hook.returnType ? [hook.returnType] : [];
     const jsImpl = !hook.kind
@@ -1304,11 +1340,59 @@ export class Runtime {
         };
 
     table.set(
-      hook.tableIndex,
+      slot,
       this.makeWasmFunc(hook.params, hookResults, jsImpl),
     );
+    hook.tableSlot = slot;
     hook.applied = true;
+    this.diag("hook.indirect applied", {
+      typeName: hook.typeName,
+      methodName: hook.methodName,
+      tableName,
+      tableIndex: hook.tableIndex,
+      tableSlot: slot,
+      tableLength: table.length,
+    });
     return true;
+  }
+
+  private resolveHookTableSlot(table: WebAssembly.Table, hook: Hook) {
+    if (!this.isValidTableIndex(hook.tableIndex)) return undefined;
+    const candidates = [
+      hook.tableIndex - 1,
+      hook.tableIndex,
+    ].filter(
+      (slot, index, slots) =>
+        Number.isInteger(slot) &&
+        slot >= 0 &&
+        slot < table.length &&
+        slots.indexOf(slot) === index,
+    );
+    for (const slot of candidates) {
+      let value: any;
+      try {
+        value = table.get(slot);
+      } catch (err) {
+        this.diag("hook.indirect table.get failed", {
+          typeName: hook.typeName,
+          methodName: hook.methodName,
+          tableIndex: hook.tableIndex,
+          tableSlot: slot,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        continue;
+      }
+      this.diag("hook.indirect table candidate", {
+        typeName: hook.typeName,
+        methodName: hook.methodName,
+        tableIndex: hook.tableIndex,
+        tableSlot: slot,
+        tableLength: table.length,
+        valueType: typeof value,
+      });
+      if (typeof value === "function") return slot;
+    }
+    return undefined;
   }
 
   private makeWasmFunc(
@@ -2637,6 +2721,7 @@ export class Runtime {
 type Hook = {
   index?: number;
   tableIndex?: number;
+  tableSlot?: number;
   typeName: string;
   methodName: string;
   params: string[];

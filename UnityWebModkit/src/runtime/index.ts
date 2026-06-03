@@ -1027,6 +1027,9 @@ export class Runtime {
               fieldStr: originalExportName,
               kind: "func",
             });
+            useHook.originalExportName = originalExportName;
+            useHook.oldFuncIndex = oldFuncIndex.i32();
+            useHook.replacementFuncIndex = replacementFuncIndex.i32();
             patchedHooks.push(useHook);
             hookRewriteCounts.push(0);
             this.diag("hook.direct prepared", {
@@ -1338,7 +1341,10 @@ export class Runtime {
       return false;
     }
 
-    const slot = this.resolveHookTableSlot(table, hook);
+    const expectedOriginalFunc = hook.originalExportName
+      ? this.getWasmExportFunction(hook.originalExportName)
+      : undefined;
+    const slot = this.resolveHookTableSlot(table, hook, expectedOriginalFunc);
     if (slot === undefined) {
       this.diag("hook.indirect skipped unresolved table slot", {
         typeName: hook.typeName,
@@ -1346,6 +1352,10 @@ export class Runtime {
         tableName,
         tableSource,
         tableIndex: hook.tableIndex,
+        internalIndex: hook.index,
+        oldFuncIndex: hook.oldFuncIndex,
+        originalExportName: hook.originalExportName,
+        hasOriginalExport: Boolean(expectedOriginalFunc),
         tableLength: table.length,
       });
       return false;
@@ -1423,16 +1433,25 @@ export class Runtime {
       tableIndex: hook.tableIndex,
       tableSlot: slot,
       tableLength: table.length,
+      oldFuncIndex: hook.oldFuncIndex,
+      originalExportName: hook.originalExportName,
+      matchedOriginalExport: Boolean(expectedOriginalFunc) &&
+        originalFunc === expectedOriginalFunc,
     });
     return true;
   }
 
-  private resolveHookTableSlot(table: WebAssembly.Table, hook: Hook) {
+  private resolveHookTableSlot(
+    table: WebAssembly.Table,
+    hook: Hook,
+    expectedOriginalFunc?: Function,
+  ) {
     if (!this.isValidTableIndex(hook.tableIndex)) return undefined;
     const candidates = [
       hook.tableIndex,
       hook.tableIndex - 1,
-    ].filter(
+      hook.tableSlot,
+    ].filter((slot): slot is number => typeof slot === "number").filter(
       (slot, index, slots) =>
         Number.isInteger(slot) &&
         slot >= 0 &&
@@ -1460,8 +1479,52 @@ export class Runtime {
         tableSlot: slot,
         tableLength: table.length,
         valueType: typeof value,
+        matchesOriginalExport: Boolean(expectedOriginalFunc) &&
+          value === expectedOriginalFunc,
       });
-      if (typeof value === "function") return slot;
+      if (expectedOriginalFunc && value === expectedOriginalFunc) {
+        this.diag("hook.indirect matched original export candidate", {
+          typeName: hook.typeName,
+          methodName: hook.methodName,
+          tableIndex: hook.tableIndex,
+          tableSlot: slot,
+          oldFuncIndex: hook.oldFuncIndex,
+          originalExportName: hook.originalExportName,
+        });
+        return slot;
+      }
+      if (!expectedOriginalFunc && typeof value === "function") return slot;
+    }
+
+    if (expectedOriginalFunc) {
+      for (let slot = 0; slot < table.length; ++slot) {
+        let value: any;
+        try {
+          value = table.get(slot);
+        } catch {
+          continue;
+        }
+        if (value !== expectedOriginalFunc) continue;
+        this.diag("hook.indirect matched original export scan", {
+          typeName: hook.typeName,
+          methodName: hook.methodName,
+          tableIndex: hook.tableIndex,
+          tableSlot: slot,
+          tableLength: table.length,
+          oldFuncIndex: hook.oldFuncIndex,
+          originalExportName: hook.originalExportName,
+        });
+        return slot;
+      }
+      this.diag("hook.indirect original export not found in table", {
+        typeName: hook.typeName,
+        methodName: hook.methodName,
+        tableIndex: hook.tableIndex,
+        internalIndex: hook.index,
+        oldFuncIndex: hook.oldFuncIndex,
+        originalExportName: hook.originalExportName,
+        tableLength: table.length,
+      });
     }
     return undefined;
   }
@@ -2793,6 +2856,9 @@ type Hook = {
   index?: number;
   tableIndex?: number;
   tableSlot?: number;
+  oldFuncIndex?: number;
+  replacementFuncIndex?: number;
+  originalExportName?: string;
   typeName: string;
   methodName: string;
   params: string[];

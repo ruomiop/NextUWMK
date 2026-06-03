@@ -1270,7 +1270,15 @@ export class Runtime {
       });
       return false;
     }
-    const table = (instantiatedSource as any).instance.exports[tableName];
+    const exportedTable = (instantiatedSource as any).instance.exports[tableName];
+    const table = this.isWasmTable(exportedTable)
+      ? exportedTable
+      : this.wasmTable || this.getWasmTable();
+    const tableSource = table === exportedTable
+      ? "exports"
+      : table === this.wasmTable
+        ? "runtime-cache"
+        : "runtime-probe";
     if (
       !table ||
       typeof table.get !== "function" ||
@@ -1280,6 +1288,8 @@ export class Runtime {
         typeName: hook.typeName,
         methodName: hook.methodName,
         tableName,
+        tableSource,
+        hasCachedTable: Boolean(this.wasmTable),
         exports: Object.keys((instantiatedSource as any).instance.exports || {}),
       });
       return false;
@@ -1291,6 +1301,7 @@ export class Runtime {
         typeName: hook.typeName,
         methodName: hook.methodName,
         tableName,
+        tableSource,
         tableIndex: hook.tableIndex,
         tableLength: table.length,
       });
@@ -1302,6 +1313,7 @@ export class Runtime {
         typeName: hook.typeName,
         methodName: hook.methodName,
         tableName,
+        tableSource,
         tableIndex: hook.tableIndex,
         tableSlot: slot,
         tableLength: table.length,
@@ -1349,6 +1361,7 @@ export class Runtime {
       typeName: hook.typeName,
       methodName: hook.methodName,
       tableName,
+      tableSource,
       tableIndex: hook.tableIndex,
       tableSlot: slot,
       tableLength: table.length,

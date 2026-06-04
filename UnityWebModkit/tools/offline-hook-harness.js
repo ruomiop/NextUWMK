@@ -242,8 +242,15 @@ function readUlebFromInstruction(instruction) {
   const tableSlot = runtime.getTableSlot(tableIndex);
 
   let instantiateCalls = 0;
+  let compileError;
   runtime.instantiate = async (bufferSource) => {
     instantiateCalls += 1;
+    try {
+      await WebAssembly.compile(bufferSource);
+    } catch (err) {
+      compileError = err && err.message ? err.message : String(err);
+      throw err;
+    }
     return {
       module: {},
       instance: {
@@ -330,6 +337,7 @@ function readUlebFromInstruction(instruction) {
       nearbyTypes,
     },
     instantiateCalls,
+    compileError,
     handleError,
   };
 

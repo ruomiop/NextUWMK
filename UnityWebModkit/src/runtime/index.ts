@@ -1018,6 +1018,17 @@ export class Runtime {
               ++j;
               continue;
             }
+            if (
+              this.applyBodyEntryHook(
+                wail,
+                useHook,
+                importObject,
+                injectType,
+              )
+            ) {
+              ++j;
+              continue;
+            }
             const replacementFuncIndex = wail.addImportEntry({
               moduleStr: "env",
               fieldStr: injectName,
@@ -1451,6 +1462,149 @@ export class Runtime {
         originalFunc === expectedOriginalFunc,
     });
     return true;
+  }
+
+  private applyBodyEntryHook(
+    wail: WailParser,
+    hook: Hook,
+    importObject: any,
+    injectType: number,
+  ) {
+    if (hook.kind !== 0 || hook.returnType) return false;
+    if (!hook.params.every((param) => param === "i32")) return false;
+
+    const targets = this.getBodyHookTargets(hook);
+    if (targets.length === 0) {
+      this.diag("hook.body skipped no target", {
+        typeName: hook.typeName,
+        methodName: hook.methodName,
+        tableIndex: hook.tableIndex,
+        internalIndex: hook.index,
+      });
+      return false;
+    }
+
+    const importModuleName = "env";
+    if (!importObject[importModuleName]) importObject[importModuleName] = {};
+    const injectName =
+      hook.typeName + "xx" + hook.methodName + "Body" + makeId(8);
+    (importObject[importModuleName] as any)[injectName] = (
+      ...args: number[]
+    ) => {
+      hook.callCount = (hook.callCount || 0) + 1;
+      hook.lastArgs = Array.from(args);
+      if (!hook.enabled) return;
+      const wrappedArgs = args.map((arg) => new ValueWrapper(arg));
+      hook.callback(...wrappedArgs);
+    };
+    const bodyPrefixFuncIndex = wail.addImportEntry({
+      moduleStr: importModuleName,
+      fieldStr: injectName,
+      kind: "func",
+      type: injectType,
+    });
+
+    const patchedTargets: number[] = [];
+    for (const target of targets) {
+      const cloneFuncIndex = wail.addFunctionEntry({
+        type: target.funcType,
+      });
+      wail.addCodeEntry(cloneFuncIndex, {
+        locals: target.locals,
+        code: this.cloneFunctionInstructions(wail, target.instructions),
+      });
+
+      const targetFuncIndex = wail.getFunctionIndex(target.globalIndex);
+      const code: any[] = [
+        ...this.makeLocalGetInstructions(hook.params.length),
+        OP_CALL,
+        bodyPrefixFuncIndex.varUint32(),
+        ...this.makeLocalGetInstructions(hook.params.length),
+        OP_CALL,
+        cloneFuncIndex.varUint32(),
+        0x0b,
+      ];
+      wail.editCodeEntry(targetFuncIndex, {
+        locals: [],
+        code,
+      });
+      patchedTargets.push(target.globalIndex);
+    }
+
+    hook.callCount = hook.callCount || 0;
+    hook.lastArgs = hook.lastArgs || [];
+    hook.bodyPatched = true;
+    hook.bodyPatchTargets = patchedTargets;
+    hook.applied = true;
+    this.diag("hook.body applied", {
+      typeName: hook.typeName,
+      methodName: hook.methodName,
+      tableIndex: hook.tableIndex,
+      internalIndex: hook.index,
+      targets: patchedTargets,
+      injectType,
+      params: hook.params,
+    });
+    return true;
+  }
+
+  private getBodyHookTargets(hook: Hook) {
+    const candidates = [
+      hook.index,
+      hook.index === undefined ? undefined : hook.index + 1,
+    ]
+      .filter((index): index is number => this.isValidInternalIndex(index))
+      .filter((index, offset, indexes) => indexes.indexOf(index) === offset);
+    return candidates
+      .map((globalIndex) => {
+        const functionSectionIndex =
+          globalIndex - this.wasmImportFunctionCount;
+        if (functionSectionIndex < 0) return undefined;
+        const code = this.internalWasmCode?.[functionSectionIndex];
+        const functionInfo = this.internalWasmFunctions?.[functionSectionIndex];
+        const type = this.internalWasmTypes?.[functionInfo?.funcType];
+        if (!code || !functionInfo || !type) return undefined;
+        if (JSON.stringify(type.params) !== JSON.stringify(hook.params))
+          return undefined;
+        if ((type.returnType || undefined) !== (hook.returnType || undefined))
+          return undefined;
+        return {
+          globalIndex,
+          funcType: functionInfo.funcType,
+          locals: code.locals || [],
+          instructions: code.instructions || [],
+        };
+      })
+      .filter((target): target is {
+        globalIndex: number;
+        funcType: number;
+        locals: string[];
+        instructions: Uint8Array[];
+      } => Boolean(target));
+  }
+
+  private makeLocalGetInstructions(count: number) {
+    const code: any[] = [];
+    for (let i = 0; i < count; i++) {
+      code.push(0x20, VarUint32ToArray(i));
+    }
+    return code;
+  }
+
+  private cloneFunctionInstructions(
+    wail: WailParser,
+    instructions: Uint8Array[],
+  ) {
+    const code: any[] = [];
+    for (const instruction of instructions) {
+      if (instruction[0] !== OP_CALL) {
+        code.push(...Array.from(instruction));
+        continue;
+      }
+      const target = this.readUlebFromInstruction(instruction);
+      code.push(OP_CALL, wail.getFunctionIndex(target).varUint32());
+    }
+    return code;
   }
 
   private resolveHookTableSlot(
@@ -2881,6 +3035,8 @@ type Hook = {
   oldFuncIndex?: number;
   replacementFuncIndex?: number;
   originalExportName?: string;
+  bodyPatched?: boolean;
+  bodyPatchTargets?: number[];
   callCount?: number;
   lastArgs?: number[];
   typeName: string;

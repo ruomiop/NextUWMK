@@ -199,6 +199,18 @@ function waitFor(predicate, timeoutMs = 30000) {
   });
 }
 
+function readUlebFromInstruction(instruction) {
+  let result = 0;
+  let shift = 0;
+  for (let i = 1; i < instruction.length; i += 1) {
+    const byte = instruction[i];
+    result |= (byte & 0x7f) << shift;
+    if ((byte & 0x80) === 0) break;
+    shift += 7;
+  }
+  return result >>> 0;
+}
+
 (async () => {
   const webData = readUnityWebData(dataFile);
   const wasmBuffer = toArrayBuffer(fs.readFileSync(wasmFile));
@@ -227,6 +239,7 @@ function waitFor(predicate, timeoutMs = 30000) {
 
   runtime.searchWasmBinary(wasmBuffer);
   const tableIndex = runtime.getTableIndex(typeName, methodName);
+  const tableSlot = runtime.getTableSlot(tableIndex);
 
   let instantiateCalls = 0;
   runtime.instantiate = async (bufferSource) => {
@@ -252,6 +265,45 @@ function waitFor(predicate, timeoutMs = 30000) {
     tableIndex >= 0 && runtime.internalMappings
       ? runtime.getInternalIndex(tableIndex)
       : undefined;
+  const tableWindow = runtime.internalMappings
+    ? Array.from({ length: 9 }, (_, index) => {
+        const slot = tableIndex - 4 + index;
+        return {
+          slot,
+          internalIndex:
+            slot > 0 && runtime.internalMappings[0]?.elements
+              ? runtime.internalMappings[0].elements[slot - 1]
+              : undefined,
+        };
+      })
+    : [];
+  const directCallers =
+    internalIndex === undefined || !runtime.internalWasmCode
+      ? []
+      : runtime.internalWasmCode
+          .filter((func) =>
+            (func.instructions || []).some(
+              (instruction) =>
+                instruction[0] === 0x10 &&
+                readUlebFromInstruction(instruction) === internalIndex + 1,
+            ),
+          )
+          .slice(0, 50)
+          .map((func) => ({
+            preservedIndex: func.preservedIndex,
+            globalIndex: runtime.toGlobalFunctionIndex(func.preservedIndex),
+            instructionCount: func.instructions?.length || 0,
+          }));
+  const nearbyTypes =
+    tableWindow.length === 0 || !runtime.internalWasmFunctions
+      ? []
+      : tableWindow.map((item) => ({
+          ...item,
+          type:
+            item.internalIndex !== undefined
+              ? runtime.getWasmFunctionTypeByGlobalIndex(item.internalIndex + 1)
+              : undefined,
+        }));
 
   const summary = {
     distFile,
@@ -271,7 +323,11 @@ function waitFor(predicate, timeoutMs = 30000) {
       typeName,
       methodName,
       tableIndex,
+      tableSlot,
       internalIndex,
+      bodyGlobalIndex: internalIndex === undefined ? undefined : internalIndex + 1,
+      directCallers,
+      nearbyTypes,
     },
     instantiateCalls,
     handleError,

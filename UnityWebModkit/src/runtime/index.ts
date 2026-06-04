@@ -947,6 +947,8 @@ export class Runtime {
             let injectFunc = null;
             if (!useHook.kind) {
               injectFunc = (...args: number[]) => {
+                useHook.callCount = (useHook.callCount || 0) + 1;
+                useHook.lastArgs = Array.from(args);
                 const originalFunction =
                   this.getWasmExportFunction(originalExportName);
                 if (!originalFunction) {
@@ -976,6 +978,8 @@ export class Runtime {
               };
             } else {
               injectFunc = (...args: number[]) => {
+                useHook.callCount = (useHook.callCount || 0) + 1;
+                useHook.lastArgs = Array.from(args);
                 const originalFunction =
                   this.getWasmExportFunction(originalExportName);
                 if (!originalFunction) {
@@ -1378,6 +1382,8 @@ export class Runtime {
     const hookResults = hook.returnType ? [hook.returnType] : [];
     const jsImpl = !hook.kind
       ? (...args: number[]) => {
+          hook.callCount = (hook.callCount || 0) + 1;
+          hook.lastArgs = Array.from(args);
           if (!hook.enabled) {
             return hook.returnType
               ? originalFunc(...args)
@@ -1394,6 +1400,8 @@ export class Runtime {
           return hook.returnType ? 0 : undefined;
         }
       : (...args: number[]) => {
+          hook.callCount = (hook.callCount || 0) + 1;
+          hook.lastArgs = Array.from(args);
           let originalResult = originalFunc(...args);
           if (!hook.enabled)
             return hook.returnType ? originalResult : undefined;
@@ -1448,8 +1456,8 @@ export class Runtime {
   ) {
     if (!this.isValidTableIndex(hook.tableIndex)) return undefined;
     const candidates = [
-      hook.tableIndex,
       hook.tableIndex - 1,
+      hook.tableIndex,
       hook.tableSlot,
     ].filter((slot): slot is number => typeof slot === "number").filter(
       (slot, index, slots) =>
@@ -2805,13 +2813,23 @@ export class Runtime {
     return this.internalMappings[0].elements[tableIndex - 1];
   }
 
+  public getTableSlot(
+    tableIndex: number | undefined,
+    table?: WebAssembly.Table,
+  ): number | undefined {
+    if (!this.isValidTableIndex(tableIndex)) return undefined;
+    const slot = tableIndex - 1;
+    if (table && (slot < 0 || slot >= table.length)) return undefined;
+    return slot;
+  }
+
   private isValidTableIndex(
     tableIndex: number | undefined,
   ): tableIndex is number {
     return (
       typeof tableIndex === "number" &&
       Number.isFinite(tableIndex) &&
-      tableIndex >= 0
+      tableIndex > 0
     );
   }
 
@@ -2859,6 +2877,8 @@ type Hook = {
   oldFuncIndex?: number;
   replacementFuncIndex?: number;
   originalExportName?: string;
+  callCount?: number;
+  lastArgs?: number[];
   typeName: string;
   methodName: string;
   params: string[];
@@ -3097,6 +3117,7 @@ class ModkitPlugin {
       applied: false,
       enabled: true,
       kind,
+      callCount: 0,
       callback,
     };
     this._hooks.push(hook);
@@ -3134,7 +3155,14 @@ class ModkitPlugin {
         args = args.map((arg) =>
           arg instanceof ValueWrapper ? arg.val() : arg,
         );
-      const result = table.get(tableIndex)(...(args as any[]));
+      const tableSlot = this._runtime.getTableSlot(tableIndex, table);
+      if (tableSlot === undefined)
+        throw new Error(
+          `Failed to invoke function! Invalid table slot for ${
+            target + "$$" + targetMethodOrArgs
+          }`,
+        );
+      const result = table.get(tableSlot)(...(args as any[]));
       return new ValueWrapper(result);
     } else if (
       typeof targetMethodOrArgs === "object" ||
@@ -3152,7 +3180,14 @@ class ModkitPlugin {
       targetMethodOrArgs = targetMethodOrArgs.map((arg) =>
         arg instanceof ValueWrapper ? arg.val() : arg,
       );
-      const result = table.get(tableIndex)(...(targetMethodOrArgs as any[]));
+      const tableSlot = this._runtime.getTableSlot(tableIndex, table);
+      if (tableSlot === undefined)
+        throw new Error(
+          `Failed to invoke function! Invalid table slot for ${
+            typeName + "$$" + methodName
+          }`,
+        );
+      const result = table.get(tableSlot)(...(targetMethodOrArgs as any[]));
       return new ValueWrapper(result);
     }
   }

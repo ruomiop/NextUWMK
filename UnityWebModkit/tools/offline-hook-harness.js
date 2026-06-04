@@ -232,6 +232,16 @@ function readUlebFromInstruction(instruction) {
     },
     () => true,
   );
+  if (args.get("duplicate-body") === "true") {
+    plugin.hookPrefix(
+      {
+        typeName: "SimpleEditableBuilding",
+        methodName: "Update",
+        params: ["i32", "i32"],
+      },
+      () => true,
+    );
+  }
 
   runtime.onUnityWebData(webData);
   const metadataReady = await waitFor(() => runtime.metadata.methodCount > 0);

@@ -81,6 +81,7 @@ export class Runtime {
   private wasmMemory?: WebAssembly.Memory;
   private wasmCacheKey = "";
   private wasmImportFunctionCount = 0;
+  private bodyHookPatchedTargets = new Set<number>();
   private stringNewEncoding: "utf8" | "utf16" = "utf8";
   private allocationRegistry?: {
     register(target: object, heldValue: number, unregisterToken?: object): void;
@@ -733,6 +734,7 @@ export class Runtime {
           byteLength: bufferSource.byteLength,
           metadata: this.metadata,
         });
+        this.bodyHookPatchedTargets.clear();
         await this.readIl2CppContextFromStorage().catch(() => undefined);
         this.diag("il2cpp context after cache", {
           hasContext: Boolean(this.il2CppContext),
@@ -1478,13 +1480,16 @@ export class Runtime {
     if (hook.kind !== 0 || hook.returnType) return false;
     if (!hook.params.every((param) => param === "i32")) return false;
 
-    const targets = this.getBodyHookTargets(hook);
+    const targets = this.getBodyHookTargets(hook).filter(
+      (target) => !this.bodyHookPatchedTargets.has(target.globalIndex),
+    );
     if (targets.length === 0) {
       this.diag("hook.body skipped no target", {
         typeName: hook.typeName,
         methodName: hook.methodName,
         tableIndex: hook.tableIndex,
         internalIndex: hook.index,
+        reason: "missing-or-already-patched",
       });
       return false;
     }
@@ -1533,6 +1538,7 @@ export class Runtime {
         locals: [],
         code,
       });
+      this.bodyHookPatchedTargets.add(target.globalIndex);
       patchedTargets.push(target.globalIndex);
     }
 

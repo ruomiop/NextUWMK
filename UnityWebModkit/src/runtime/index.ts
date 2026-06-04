@@ -3084,6 +3084,25 @@ export type HookInfo = {
   returnType?: string;
 };
 
+export type UpdateProbeOptions = {
+  methodNames?: string[];
+  typePattern?: string | RegExp;
+  methodPattern?: string | RegExp;
+  params?: string[];
+  maxHooks?: number;
+  logEvery?: number;
+};
+
+export type UpdateProbeHit = {
+  typeName: string;
+  methodName: string;
+  hook: any;
+  callCount: number;
+  args: ValueWrapper[];
+};
+
+type UpdateProbeCallback = (hit: UpdateProbeHit) => void;
+
 export type ImportHookInfo = {
   moduleName?: string;
   importName?: string;
@@ -3195,6 +3214,80 @@ class ModkitPlugin {
     return this.hook(target, callback, 1);
   }
 
+  public probeUpdateHooks(
+    options: UpdateProbeOptions = {},
+    callback?: UpdateProbeCallback,
+  ): Hook[] {
+    const methodNames = new Set(
+      (options.methodNames || ["Update", "FixedUpdate", "LateUpdate"]).map(
+        (name) => name.toLowerCase(),
+      ),
+    );
+    const params = options.params || ["i32", "i32"];
+    const maxHooks = options.maxHooks ?? 80;
+    const logEvery = Math.max(1, options.logEvery ?? 60);
+    const typeMatches = this.makeProbeMatcher(
+      options.typePattern ||
+        /player|controller|movement|move|weapon|gun|character|combat|network|local|input|camera/i,
+    );
+    const methodMatches = this.makeProbeMatcher(options.methodPattern);
+
+    const candidates = this.listMethods()
+      .filter((method: any) => {
+        const baseName = this.getProbeBaseMethodName(method.name);
+        if (!methodNames.has(baseName.toLowerCase())) return false;
+        if (!typeMatches(method.typeName)) return false;
+        if (methodMatches && !methodMatches(method.name)) return false;
+        return true;
+      })
+      .slice(0, maxHooks);
+
+    const hooks: Hook[] = [];
+    for (const method of candidates) {
+      let hook: Hook;
+      hook = this.hookPrefix(
+        {
+          typeName: method.typeName,
+          methodName: method.name,
+          params,
+        },
+        (...args: any[]) => {
+          const wrappedArgs = args.map((arg) =>
+            arg instanceof ValueWrapper ? arg : new ValueWrapper(arg),
+          );
+          const callCount = hook.callCount || 0;
+          if (callback) {
+            callback({
+              typeName: method.typeName,
+              methodName: method.name,
+              hook,
+              callCount,
+              args: wrappedArgs,
+            });
+            return;
+          }
+          if (callCount <= 5 || callCount % logEvery === 0) {
+            this.logger.info(
+              "[PROBE] %s.%s hit #%d %o",
+              method.typeName,
+              method.name,
+              callCount,
+              wrappedArgs.map((arg) => arg.val()),
+            );
+          }
+        },
+      );
+      hooks.push(hook);
+    }
+
+    this.logger.info(
+      "[PROBE] installed %d update hook(s) %o",
+      hooks.length,
+      candidates.map((method: any) => `${method.typeName}.${method.name}`),
+    );
+    return hooks;
+  }
+
   public hookImport(
     target: ImportHookInfo,
     callback: ImportHookCallback,
@@ -3282,6 +3375,22 @@ class ModkitPlugin {
     };
     this._hooks.push(hook);
     return hook;
+  }
+
+  private getProbeBaseMethodName(name: string) {
+    return name.replace(/_\d+$/, "");
+  }
+
+  private makeProbeMatcher(pattern?: string | RegExp) {
+    if (!pattern) return (_value: string) => true;
+    if (pattern instanceof RegExp) {
+      return (value: string) => {
+        pattern.lastIndex = 0;
+        return pattern.test(value);
+      };
+    }
+    const needle = pattern.toLowerCase();
+    return (value: string) => value.toLowerCase().includes(needle);
   }
 
   public call(target: string, args: any[]): ValueWrapper;

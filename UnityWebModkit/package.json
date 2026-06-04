@@ -7,7 +7,8 @@
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "build": "del /q /s dist && tsc && npx webpack && node tools/patch-dist-global.js",
-    "harness:object-query": "node tools/object-query-harness-server.js"
+    "harness:object-query": "node tools/object-query-harness-server.js",
+    "harness:offline-hook": "node tools/offline-hook-harness.js"
   },
   "files": [
     "lib"

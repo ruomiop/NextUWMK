@@ -1024,6 +1024,8 @@ export class Runtime {
               kind: "func",
               type: injectType,
             });
+            useHook.callCount = useHook.callCount || 0;
+            useHook.lastArgs = useHook.lastArgs || [];
             replacementFuncIndexes.push(replacementFuncIndex);
             const oldFuncIndex = wail.getFunctionIndex(useHook.index);
             oldFuncIndexes.push(oldFuncIndex);
@@ -1378,6 +1380,8 @@ export class Runtime {
       });
       return false;
     }
+    hook.callCount = hook.callCount || 0;
+    hook.lastArgs = hook.lastArgs || [];
 
     const hookResults = hook.returnType ? [hook.returnType] : [];
     const jsImpl = !hook.kind

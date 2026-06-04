@@ -750,6 +750,9 @@ export class Runtime {
           fieldTypes: Object.keys(this.il2CppContext.fieldData || {}).length,
           methodTypes: Object.keys(this.il2CppContext.scriptData || {}).length,
         });
+        for (const plugin of this.plugins) {
+          plugin.expandPendingUpdateProbes();
+        }
         this.applyImportHooks(importObject);
 
         if (this.shouldUseIndirectOnlyHooks()) {
@@ -761,6 +764,7 @@ export class Runtime {
               this.tableName || this.resolveTableName(source.instance.exports);
             for (const plugin of this.plugins) {
               this.logger.info("Loading [%s %s]", plugin.name, plugin.version);
+              plugin.expandPendingUpdateProbes();
               for (const hook of plugin.hooks) {
                 hook.tableIndex = this.getTableIndex(
                   hook.typeName,
@@ -909,6 +913,7 @@ export class Runtime {
             usePlugin.name,
             usePlugin.version,
           );
+          usePlugin.expandPendingUpdateProbes();
           this.applyBytecodePatches(wail, usePlugin);
           var j = 0,
             hookLen = usePlugin.hooks.length;
@@ -3103,6 +3108,12 @@ export type UpdateProbeHit = {
 
 type UpdateProbeCallback = (hit: UpdateProbeHit) => void;
 
+type PendingUpdateProbe = {
+  options: UpdateProbeOptions;
+  callback?: UpdateProbeCallback;
+  hooks: Hook[];
+};
+
 export type ImportHookInfo = {
   moduleName?: string;
   importName?: string;
@@ -3151,6 +3162,7 @@ class ModkitPlugin {
   private _hooks: Hook[] = [];
   private _importHooks: ImportHook[] = [];
   private _bytecodePatches: BytecodePatch[] = [];
+  private _pendingUpdateProbes: PendingUpdateProbe[] = [];
   private _runtime: Runtime;
   public readonly objects: ObjectQueryApi;
 
@@ -3218,6 +3230,32 @@ class ModkitPlugin {
     options: UpdateProbeOptions = {},
     callback?: UpdateProbeCallback,
   ): Hook[] {
+    const hooks: Hook[] = [];
+    if (this.listMethods().length === 0) {
+      this._pendingUpdateProbes.push({ options, callback, hooks });
+      this.logger.info("[PROBE] queued update hook probe until metadata is ready");
+      return hooks;
+    }
+    this.installUpdateProbeHooks(options, callback, hooks);
+    return hooks;
+  }
+
+  public expandPendingUpdateProbes() {
+    const probes = this._pendingUpdateProbes.splice(0);
+    for (const probe of probes) {
+      this.installUpdateProbeHooks(
+        probe.options,
+        probe.callback,
+        probe.hooks,
+      );
+    }
+  }
+
+  private installUpdateProbeHooks(
+    options: UpdateProbeOptions,
+    callback: UpdateProbeCallback | undefined,
+    hooks: Hook[],
+  ) {
     const methodNames = new Set(
       (options.methodNames || ["Update", "FixedUpdate", "LateUpdate"]).map(
         (name) => name.toLowerCase(),
@@ -3242,7 +3280,6 @@ class ModkitPlugin {
       })
       .slice(0, maxHooks);
 
-    const hooks: Hook[] = [];
     for (const method of candidates) {
       let hook: Hook;
       hook = this.hookPrefix(
@@ -3285,7 +3322,6 @@ class ModkitPlugin {
       hooks.length,
       candidates.map((method: any) => `${method.typeName}.${method.name}`),
     );
-    return hooks;
   }
 
   public hookImport(

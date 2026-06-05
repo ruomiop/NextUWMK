@@ -81,7 +81,7 @@ export class Runtime {
   private wasmMemory?: WebAssembly.Memory;
   private wasmCacheKey = "";
   private wasmImportFunctionCount = 0;
-  private bodyHookPatchedTargets = new Set<number>();
+  private bodyHookPatchedTargets = new Map<number, Hook[]>();
   private stringNewEncoding: "utf8" | "utf16" = "utf8";
   private allocationRegistry?: {
     register(target: object, heldValue: number, unregisterToken?: object): void;
@@ -1492,32 +1492,71 @@ export class Runtime {
     if (hook.kind !== 0 || hook.returnType) return false;
     if (!hook.params.every((param) => param === "i32")) return false;
 
-    const targets = this.getBodyHookTargets(hook).filter(
-      (target) => !this.bodyHookPatchedTargets.has(target.globalIndex),
-    );
+    const targets = this.getBodyHookTargets(hook);
     if (targets.length === 0) {
       this.diag("hook.body skipped no target", {
         typeName: hook.typeName,
         methodName: hook.methodName,
         tableIndex: hook.tableIndex,
         internalIndex: hook.index,
-        reason: "missing-or-already-patched",
+        reason: "missing",
       });
       return false;
+    }
+    const existingTargets = targets.filter((target) =>
+      this.bodyHookPatchedTargets.has(target.globalIndex)
+    );
+    const newTargets = targets.filter(
+      (target) => !this.bodyHookPatchedTargets.has(target.globalIndex),
+    );
+    if (existingTargets.length > 0) {
+      this.registerBodyHookTargets(
+        hook,
+        existingTargets.map((target) => target.globalIndex),
+      );
+    }
+    if (newTargets.length === 0) {
+      const joinedTargets = existingTargets.map((target) => target.globalIndex);
+      hook.callCount = hook.callCount || 0;
+      hook.lastArgs = hook.lastArgs || [];
+      hook.bodyPatched = true;
+      hook.bodyPatchTargets = joinedTargets;
+      hook.applied = true;
+      this.diag("hook.body joined existing target", {
+        typeName: hook.typeName,
+        methodName: hook.methodName,
+        tableIndex: hook.tableIndex,
+        internalIndex: hook.index,
+        targets: joinedTargets,
+        injectType,
+        params: hook.params,
+      });
+      return true;
     }
 
     const importModuleName = "env";
     if (!importObject[importModuleName]) importObject[importModuleName] = {};
     const injectName =
       hook.typeName + "xx" + hook.methodName + "Body" + makeId(8);
+    const patchedTargets: number[] = [];
     (importObject[importModuleName] as any)[injectName] = (
       ...args: number[]
     ) => {
-      hook.callCount = (hook.callCount || 0) + 1;
-      hook.lastArgs = Array.from(args);
-      if (!hook.enabled) return;
+      const dispatchHooks = [
+        ...new Set(
+          patchedTargets.flatMap(
+            (target) => this.bodyHookPatchedTargets.get(target) || [],
+          ),
+        ),
+      ];
+      const activeHooks = dispatchHooks.length > 0 ? dispatchHooks : [hook];
       const wrappedArgs = args.map((arg) => new ValueWrapper(arg));
-      hook.callback(...wrappedArgs);
+      for (const activeHook of activeHooks) {
+        activeHook.callCount = (activeHook.callCount || 0) + 1;
+        activeHook.lastArgs = Array.from(args);
+        if (!activeHook.enabled) continue;
+        activeHook.callback(...wrappedArgs);
+      }
     };
     const bodyPrefixFuncIndex = wail.addImportEntry({
       moduleStr: importModuleName,
@@ -1526,8 +1565,7 @@ export class Runtime {
       type: injectType,
     });
 
-    const patchedTargets: number[] = [];
-    for (const target of targets) {
+    for (const target of newTargets) {
       const cloneFuncIndex = wail.addFunctionEntry({
         type: target.funcType,
       });
@@ -1550,25 +1588,37 @@ export class Runtime {
         locals: [],
         code,
       });
-      this.bodyHookPatchedTargets.add(target.globalIndex);
+      this.registerBodyHookTargets(hook, [target.globalIndex]);
       patchedTargets.push(target.globalIndex);
     }
 
+    const allPatchedTargets = [
+      ...existingTargets.map((target) => target.globalIndex),
+      ...patchedTargets,
+    ];
     hook.callCount = hook.callCount || 0;
     hook.lastArgs = hook.lastArgs || [];
     hook.bodyPatched = true;
-    hook.bodyPatchTargets = patchedTargets;
+    hook.bodyPatchTargets = allPatchedTargets;
     hook.applied = true;
     this.diag("hook.body applied", {
       typeName: hook.typeName,
       methodName: hook.methodName,
       tableIndex: hook.tableIndex,
       internalIndex: hook.index,
-      targets: patchedTargets,
+      targets: allPatchedTargets,
       injectType,
       params: hook.params,
     });
     return true;
+  }
+
+  private registerBodyHookTargets(hook: Hook, targets: number[]) {
+    for (const target of targets) {
+      const hooks = this.bodyHookPatchedTargets.get(target) || [];
+      if (!hooks.includes(hook)) hooks.push(hook);
+      this.bodyHookPatchedTargets.set(target, hooks);
+    }
   }
 
   private getBodyHookTargets(hook: Hook) {

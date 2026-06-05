@@ -1800,8 +1800,8 @@ export class Runtime {
   ) {
     if (!this.isValidTableIndex(hook.tableIndex)) return undefined;
     const candidates = [
-      hook.tableIndex - 1,
       hook.tableIndex,
+      hook.tableIndex - 1,
       hook.tableSlot,
     ].filter((slot): slot is number => typeof slot === "number").filter(
       (slot, index, slots) =>
@@ -1834,6 +1834,21 @@ export class Runtime {
         matchesOriginalExport: Boolean(expectedOriginalFunc) &&
           value === expectedOriginalFunc,
       });
+      const slotInternalIndex = this.getInternalIndexForTableSlot(slot);
+      if (
+        hook.index !== undefined &&
+        slotInternalIndex !== undefined &&
+        slotInternalIndex === hook.index
+      ) {
+        this.diag("hook.indirect matched internal index candidate", {
+          typeName: hook.typeName,
+          methodName: hook.methodName,
+          tableIndex: hook.tableIndex,
+          tableSlot: slot,
+          internalIndex: hook.index,
+        });
+        return slot;
+      }
       if (expectedOriginalFunc && value === expectedOriginalFunc) {
         this.diag("hook.indirect matched original export candidate", {
           typeName: hook.typeName,
@@ -3164,12 +3179,17 @@ export class Runtime {
     return this.internalMappings[0].elements[tableIndex - 1];
   }
 
+  private getInternalIndexForTableSlot(slot: number): number | undefined {
+    if (!this.internalMappings?.[0]?.elements) return undefined;
+    return this.internalMappings[0].elements[slot - 1];
+  }
+
   public getTableSlot(
     tableIndex: number | undefined,
     table?: WebAssembly.Table,
   ): number | undefined {
     if (!this.isValidTableIndex(tableIndex)) return undefined;
-    const slot = tableIndex - 1;
+    const slot = tableIndex;
     if (table && (slot < 0 || slot >= table.length)) return undefined;
     return slot;
   }

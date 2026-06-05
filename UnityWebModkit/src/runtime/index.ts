@@ -3796,7 +3796,12 @@ class ModkitPlugin {
           }
         },
       );
-      hook.skipDirectFallback = options.directFallback !== true;
+      if (wasmType.returnType && options.directFallback !== true) {
+        hook.runtimeTableFallbackOnly = true;
+      }
+      hook.skipDirectFallback = wasmType.returnType
+        ? options.directFallback === false
+        : options.directFallback !== true;
       hooks.push(hook);
     }
 

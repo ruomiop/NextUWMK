@@ -230,27 +230,31 @@ function readUlebFromInstruction(instruction) {
         typePattern: /.*/,
         maxHooks: Number(args.get("max-hooks") || 250),
         logEvery: 120,
+        sharedBodyFallback: args.get("shared-body") !== "false",
       },
       () => undefined,
     );
   } else {
-    plugin.hookPrefix(
-      {
-        typeName,
-        methodName,
-        params: ["i32", "i32"],
-      },
-      () => true,
-    );
+    const baseHookInfo = {
+      typeName,
+      methodName,
+      params: ["i32", "i32"],
+    };
+    if (args.has("shared-body")) {
+      baseHookInfo.sharedBodyFallback = args.get("shared-body") !== "false";
+    }
+    plugin.hookPrefix(baseHookInfo, () => true);
     if (args.get("duplicate-body") === "true") {
-      plugin.hookPrefix(
-        {
-          typeName: "SimpleEditableBuilding",
-          methodName: "Update",
-          params: ["i32", "i32"],
-        },
-        () => true,
-      );
+      const duplicateHookInfo = {
+        typeName: "SimpleEditableBuilding",
+        methodName: "Update",
+        params: ["i32", "i32"],
+      };
+      if (args.has("shared-body")) {
+        duplicateHookInfo.sharedBodyFallback =
+          args.get("shared-body") !== "false";
+      }
+      plugin.hookPrefix(duplicateHookInfo, () => true);
     }
   }
 

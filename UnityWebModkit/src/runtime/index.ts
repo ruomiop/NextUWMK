@@ -1588,8 +1588,20 @@ export class Runtime {
     }
     const aliases = this.getBodyHookAliases(hook);
     if (aliases.length > 1) {
-      hook.runtimeTableFallbackOnly = true;
-      this.diag("hook.body skipped shared target; using table fallback", {
+      hook.sharedBodyAliasCount = aliases.length;
+      if (!hook.sharedBodyFallback) {
+        hook.runtimeTableFallbackOnly = true;
+        this.diag("hook.body skipped shared target; using table fallback", {
+          typeName: hook.typeName,
+          methodName: hook.methodName,
+          tableIndex: hook.tableIndex,
+          internalIndex: hook.index,
+          aliasCount: aliases.length,
+          aliases: aliases.slice(0, 16),
+        });
+        return false;
+      }
+      this.diag("hook.body shared target; applying shared fallback", {
         typeName: hook.typeName,
         methodName: hook.methodName,
         tableIndex: hook.tableIndex,
@@ -1597,7 +1609,6 @@ export class Runtime {
         aliasCount: aliases.length,
         aliases: aliases.slice(0, 16),
       });
-      return false;
     }
     const existingTargets = targets.filter((target) =>
       this.bodyHookPatchedTargets.has(target.globalIndex)
@@ -3251,6 +3262,8 @@ type Hook = {
   bodyPatched?: boolean;
   bodyPatchTargets?: number[];
   skipDirectFallback?: boolean;
+  sharedBodyFallback?: boolean;
+  sharedBodyAliasCount?: number;
   runtimeTableFallbackOnly?: boolean;
   invokerFallbackApplied?: boolean;
   invokerTableIndex?: number;
@@ -3300,6 +3313,8 @@ export type HookInfo = {
   methodName: string;
   params: string[];
   returnType?: string;
+  sharedBodyFallback?: boolean;
+  allowSharedBody?: boolean;
 };
 
 export type UpdateProbeOptions = {
@@ -3310,6 +3325,7 @@ export type UpdateProbeOptions = {
   maxHooks?: number;
   logEvery?: number;
   directFallback?: boolean;
+  sharedBodyFallback?: boolean;
 };
 
 export type UpdateProbeHit = {
@@ -3501,6 +3517,7 @@ class ModkitPlugin {
           typeName: method.typeName,
           methodName: method.name,
           params,
+          sharedBodyFallback: options.sharedBodyFallback !== false,
         },
         (...args: any[]) => {
           const wrappedArgs = args.map((arg) =>
@@ -3618,6 +3635,8 @@ class ModkitPlugin {
       methodName: target.methodName,
       params: target.params,
       returnType: target.returnType,
+      sharedBodyFallback:
+        target.sharedBodyFallback !== false && target.allowSharedBody !== false,
       applied: false,
       enabled: true,
       kind,

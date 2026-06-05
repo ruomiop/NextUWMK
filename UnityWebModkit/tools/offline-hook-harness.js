@@ -224,23 +224,34 @@ function readUlebFromInstruction(instruction) {
     referencedAssemblies,
     diagnostics: true,
   });
-  plugin.hookPrefix(
-    {
-      typeName,
-      methodName,
-      params: ["i32", "i32"],
-    },
-    () => true,
-  );
-  if (args.get("duplicate-body") === "true") {
+  if (args.get("probe-updates") === "true") {
+    plugin.probeUpdateHooks(
+      {
+        typePattern: /.*/,
+        maxHooks: Number(args.get("max-hooks") || 250),
+        logEvery: 120,
+      },
+      () => undefined,
+    );
+  } else {
     plugin.hookPrefix(
       {
-        typeName: "SimpleEditableBuilding",
-        methodName: "Update",
+        typeName,
+        methodName,
         params: ["i32", "i32"],
       },
       () => true,
     );
+    if (args.get("duplicate-body") === "true") {
+      plugin.hookPrefix(
+        {
+          typeName: "SimpleEditableBuilding",
+          methodName: "Update",
+          params: ["i32", "i32"],
+        },
+        () => true,
+      );
+    }
   }
 
   runtime.onUnityWebData(webData);

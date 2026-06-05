@@ -1036,6 +1036,18 @@ export class Runtime {
               ++j;
               continue;
             }
+            if (useHook.skipDirectFallback) {
+              useHook.enabled = false;
+              useHook.applied = true;
+              this.diag("hook.direct skipped by hook option", {
+                typeName: useHook.typeName,
+                methodName: useHook.methodName,
+                tableIndex: useHook.tableIndex,
+                internalIndex: useHook.index,
+              });
+              ++j;
+              continue;
+            }
             const replacementFuncIndex = wail.addImportEntry({
               moduleStr: "env",
               fieldStr: injectName,
@@ -3048,6 +3060,7 @@ type Hook = {
   originalExportName?: string;
   bodyPatched?: boolean;
   bodyPatchTargets?: number[];
+  skipDirectFallback?: boolean;
   callCount?: number;
   lastArgs?: number[];
   typeName: string;
@@ -3102,6 +3115,7 @@ export type UpdateProbeOptions = {
   params?: string[];
   maxHooks?: number;
   logEvery?: number;
+  directFallback?: boolean;
 };
 
 export type UpdateProbeHit = {
@@ -3320,6 +3334,7 @@ class ModkitPlugin {
           }
         },
       );
+      hook.skipDirectFallback = options.directFallback !== true;
       hooks.push(hook);
     }
 
@@ -3425,13 +3440,14 @@ class ModkitPlugin {
 
   private makeProbeMatcher(pattern?: string | RegExp) {
     if (!pattern) return (_value: string) => true;
-    if (pattern instanceof RegExp) {
+    if (Object.prototype.toString.call(pattern) === "[object RegExp]") {
+      const regexp = pattern as RegExp;
       return (value: string) => {
-        pattern.lastIndex = 0;
-        return pattern.test(value);
+        regexp.lastIndex = 0;
+        return regexp.test(value);
       };
     }
-    const needle = pattern.toLowerCase();
+    const needle = String(pattern).toLowerCase();
     return (value: string) => value.toLowerCase().includes(needle);
   }
 

@@ -261,8 +261,13 @@ function readUlebFromInstruction(instruction) {
   runtime.searchWasmBinary(wasmBuffer);
   const tableIndex = runtime.getTableIndex(typeName, methodName);
   const tableSlot = runtime.getTableSlot(tableIndex);
-  const offlineTableLength =
-    tableSlot === undefined ? 1 : Math.max(1, tableSlot + 1);
+  const invokerTableIndex = runtime.getInvokerTableIndex(typeName, methodName);
+  const invokerTableSlot = runtime.getTableSlot(invokerTableIndex);
+  const offlineTableLength = Math.max(
+    1,
+    tableSlot === undefined ? 0 : tableSlot + 1,
+    invokerTableSlot === undefined ? 0 : invokerTableSlot + 1,
+  );
   const offlineTable = new WebAssembly.Table({
     element: "anyfunc",
     initial: offlineTableLength,
@@ -270,6 +275,12 @@ function readUlebFromInstruction(instruction) {
   if (tableSlot !== undefined) {
     offlineTable.set(
       tableSlot,
+      runtime.makeWasmFunc(["i32", "i32"], [], () => undefined),
+    );
+  }
+  if (invokerTableSlot !== undefined) {
+    offlineTable.set(
+      invokerTableSlot,
       runtime.makeWasmFunc(["i32", "i32"], [], () => undefined),
     );
   }
@@ -304,6 +315,10 @@ function readUlebFromInstruction(instruction) {
   const internalIndex =
     tableIndex >= 0 && runtime.internalMappings
       ? runtime.getInternalIndex(tableIndex)
+      : undefined;
+  const invokerInternalIndex =
+    invokerTableIndex >= 0 && runtime.internalMappings
+      ? runtime.getInternalIndex(invokerTableIndex)
       : undefined;
   const tableWindow = runtime.internalMappings
     ? Array.from({ length: 9 }, (_, index) => {
@@ -343,6 +358,23 @@ function readUlebFromInstruction(instruction) {
             item.internalIndex !== undefined
               ? runtime.getWasmFunctionTypeByGlobalIndex(item.internalIndex + 1)
               : undefined,
+          aliases:
+            item.internalIndex !== undefined
+              ? runtime
+                  .listMethods()
+                  .filter((method) => {
+                    const methodTableIndex = runtime.getTableIndex(
+                      method.typeName,
+                      method.name,
+                    );
+                    return (
+                      methodTableIndex > 0 &&
+                      runtime.getInternalIndex(methodTableIndex) === item.internalIndex
+                    );
+                  })
+                  .slice(0, 12)
+                  .map((method) => `${method.typeName}.${method.name}`)
+              : [],
         }));
 
   const summary = {
@@ -366,6 +398,13 @@ function readUlebFromInstruction(instruction) {
       tableSlot,
       internalIndex,
       bodyGlobalIndex: internalIndex === undefined ? undefined : internalIndex + 1,
+      invokerTableIndex,
+      invokerTableSlot,
+      invokerInternalIndex,
+      invokerType:
+        invokerInternalIndex === undefined
+          ? undefined
+          : runtime.getWasmFunctionTypeByGlobalIndex(invokerInternalIndex + 1),
       directCallers,
       nearbyTypes,
     },

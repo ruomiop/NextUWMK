@@ -34,7 +34,7 @@ import { dataTypeSizes } from "../extras";
 
 const STORAGE_DB_VERSION = 5;
 const METADATA_CACHE_VERSION = 2;
-const IL2CPP_CONTEXT_CACHE_VERSION = 5;
+const IL2CPP_CONTEXT_CACHE_VERSION = 6;
 const IL2CPP_FUNCTION_CACHE_NAME = "il2cpp-functions";
 const WASM_SECTION_EXPORT = 7;
 const WASM_SECTION_TAG = 13;
@@ -1137,9 +1137,15 @@ export class Runtime {
               ]),
             ];
             fallbackHooks.forEach((hook) => {
-              if (
-                !this.applyIndirectHook(instantiatedSource, hook, tableName)
-              ) {
+              const methodTableApplied = this.applyIndirectHook(
+                instantiatedSource,
+                hook,
+                tableName,
+              );
+              const invokerApplied = hook.runtimeTableFallbackOnly
+                ? this.applyInvokerHook(instantiatedSource, hook, tableName)
+                : false;
+              if (!methodTableApplied && !invokerApplied) {
                 this.logger.warn(
                   "Hook %s.%s was not applied",
                   hook.typeName,
@@ -1495,6 +1501,69 @@ export class Runtime {
         originalFunc === expectedOriginalFunc,
     });
     return true;
+  }
+
+  private applyInvokerHook(
+    instantiatedSource: WebAssembly.WebAssemblyInstantiatedSource,
+    hook: Hook,
+    tableName: string,
+  ) {
+    const invokerTableIndex = this.getInvokerTableIndex(
+      hook.typeName,
+      hook.methodName,
+    );
+    if (!this.isValidTableIndex(invokerTableIndex)) {
+      this.diag("hook.invoker skipped missing invoker", {
+        typeName: hook.typeName,
+        methodName: hook.methodName,
+      });
+      return false;
+    }
+    const invokerInternalIndex = this.getInternalIndex(invokerTableIndex);
+    const invokerType = this.getWasmFunctionTypeByGlobalIndex(
+      invokerInternalIndex + 1,
+    );
+    if (
+      !invokerType ||
+      !invokerType.params?.every((param: string) => param === "i32")
+    ) {
+      this.diag("hook.invoker skipped unsupported signature", {
+        typeName: hook.typeName,
+        methodName: hook.methodName,
+        invokerTableIndex,
+        invokerInternalIndex,
+        invokerType,
+      });
+      return false;
+    }
+
+    const originalTableIndex = hook.tableIndex;
+    const originalTableSlot = hook.tableSlot;
+    const originalParams = hook.params;
+    const originalReturnType = hook.returnType;
+    hook.tableIndex = invokerTableIndex;
+    hook.tableSlot = undefined;
+    hook.params = invokerType.params;
+    hook.returnType = invokerType.returnType;
+    const applied = this.applyIndirectHook(instantiatedSource, hook, tableName);
+    if (applied) {
+      hook.invokerFallbackApplied = true;
+      hook.invokerTableIndex = invokerTableIndex;
+      hook.invokerInternalIndex = invokerInternalIndex;
+      this.diag("hook.invoker applied", {
+        typeName: hook.typeName,
+        methodName: hook.methodName,
+        invokerTableIndex,
+        invokerInternalIndex,
+        invokerType,
+      });
+      return true;
+    }
+    hook.tableIndex = originalTableIndex;
+    hook.tableSlot = originalTableSlot;
+    hook.params = originalParams;
+    hook.returnType = originalReturnType;
+    return false;
   }
 
   private applyBodyEntryHook(
@@ -2752,6 +2821,13 @@ export class Runtime {
     return result;
   }
 
+  public getInvokerTableIndex(targetClass: string, targetMethod: string): number {
+    if (!this.il2CppContext?.scriptInvokerData?.[targetClass]) return -1;
+    const result = this.il2CppContext.scriptInvokerData[targetClass][targetMethod];
+    if (!result) return -1;
+    return result;
+  }
+
   public getFieldInfo(targetClass: string, fieldName: string) {
     const override = this.getFieldOffsetOverride(targetClass, fieldName);
     const fieldData = this.il2CppContext?.fieldData;
@@ -3156,6 +3232,9 @@ type Hook = {
   bodyPatchTargets?: number[];
   skipDirectFallback?: boolean;
   runtimeTableFallbackOnly?: boolean;
+  invokerFallbackApplied?: boolean;
+  invokerTableIndex?: number;
+  invokerInternalIndex?: number;
   callCount?: number;
   lastArgs?: number[];
   typeName: string;

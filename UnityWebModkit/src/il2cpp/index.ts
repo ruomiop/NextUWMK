@@ -158,6 +158,9 @@ type Il2CppMethodDefinition = {
 export type Il2CppContext = {
   codeGenModules: Il2CppCodeGenModuleCollection;
   codeGenModuleMethodPointers: Il2CppCodeGenModuleMethodPointers;
+  codeGenModuleInvokerIndices?: Il2CppCodeGenModuleInvokerIndices;
+  invokerPointers?: number[];
+  scriptInvokerData?: Il2CppScriptData;
   scriptData: Il2CppScriptData;
   fieldData: Il2CppFieldData;
   typeAddresses?: number[];
@@ -199,6 +202,10 @@ type Il2CppCodeGenModuleCollection = {
 };
 
 type Il2CppCodeGenModuleMethodPointers = {
+  [moduleName: string]: number[];
+};
+
+type Il2CppCodeGenModuleInvokerIndices = {
   [moduleName: string]: number[];
 };
 
@@ -286,6 +293,12 @@ export function createIl2CppContext(
   );
   const codeGenModules: Il2CppCodeGenModuleCollection = {};
   const codeGenModuleMethodPointers: Il2CppCodeGenModuleMethodPointers = {};
+  const codeGenModuleInvokerIndices: Il2CppCodeGenModuleInvokerIndices = {};
+  const invokerPointers = readCodeGenModuleMethodPointers(
+    memoryReader,
+    pCodeRegistration.invokerPointers,
+    pCodeRegistration.invokerPointersCount,
+  );
   let metadataRegistration = 0;
   for (let i = 0; i < pCodeGenModules.length; i++) {
     const pCodeGenModule = readCodeGenModule(memoryReader, pCodeGenModules[i]);
@@ -301,8 +314,15 @@ export function createIl2CppContext(
       pCodeGenModule.methodPointerCount,
     );
     codeGenModuleMethodPointers[moduleName] = methodPointers;
+    const invokerIndices = readCodeGenModuleMethodPointers(
+      memoryReader,
+      pCodeGenModule.invokerIndices,
+      pCodeGenModule.methodPointerCount,
+    );
+    codeGenModuleInvokerIndices[moduleName] = invokerIndices;
   }
   const scriptData: Il2CppScriptData = {};
+  const scriptInvokerData: Il2CppScriptData = {};
   const fieldData: Il2CppFieldData = {};
   const fallbackMetadataRegistration = findMetadataRegistration(
     memoryReader,
@@ -371,16 +391,32 @@ export function createIl2CppContext(
         let methodPointerIndex = methodToken & 0x00ffffff;
         const ptr = ptrs[methodPointerIndex - 1];
         if (ptr === undefined) continue;
+        const invokerIndex =
+          codeGenModuleInvokerIndices[imageName]?.[methodPointerIndex - 1];
+        const invokerPtr =
+          invokerIndex === undefined || invokerIndex < 0
+            ? undefined
+            : invokerPointers[invokerIndex];
         if (!scriptData[fullTypeName]) {
           scriptData[fullTypeName] = {}; // Create an empty object if it doesn't exist
         }
+        if (!scriptInvokerData[fullTypeName]) {
+          scriptInvokerData[fullTypeName] = {};
+        }
         if (scriptData[fullTypeName][methodName] !== undefined) {
           const ptrRef = scriptData[fullTypeName][methodName];
+          const invokerRef = scriptInvokerData[fullTypeName][methodName];
           delete scriptData[fullTypeName][methodName];
+          delete scriptInvokerData[fullTypeName][methodName];
           scriptData[fullTypeName][methodName + "_" + ptrRef] = ptrRef;
+          if (invokerRef !== undefined)
+            scriptInvokerData[fullTypeName][methodName + "_" + ptrRef] =
+              invokerRef;
           methodName = `${methodName}_${ptr}`;
         }
         scriptData[fullTypeName][methodName] = ptr;
+        if (invokerPtr !== undefined)
+          scriptInvokerData[fullTypeName][methodName] = invokerPtr;
       }
       if (!fieldData[fullTypeName]) fieldData[fullTypeName] = {};
       for (
@@ -421,6 +457,9 @@ export function createIl2CppContext(
   return ok({
     codeGenModules,
     codeGenModuleMethodPointers,
+    codeGenModuleInvokerIndices,
+    invokerPointers,
+    scriptInvokerData,
     scriptData,
     fieldData,
     typeAddresses,

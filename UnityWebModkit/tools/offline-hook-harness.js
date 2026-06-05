@@ -234,6 +234,21 @@ function readUlebFromInstruction(instruction) {
       },
       () => undefined,
     );
+  } else if (args.get("probe-type") === "true") {
+    const probeOptions = {
+      typeName,
+      methodPattern: args.get("method-pattern"),
+      maxHooks: Number(args.get("max-hooks") || 200),
+      logEvery: 120,
+      sharedBodyFallback: args.get("shared-body") !== "false",
+    };
+    if (args.has("include-returns")) {
+      probeOptions.includeReturns = args.get("include-returns") === "true";
+    }
+    plugin.probeTypeHooks(
+      probeOptions,
+      () => undefined,
+    );
   } else {
     const baseHookInfo = {
       typeName,

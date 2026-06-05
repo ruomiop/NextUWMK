@@ -742,7 +742,9 @@ export class Runtime {
           hasContext: Boolean(this.il2CppContext),
           typeAddresses: this.il2CppContext?.typeAddresses?.length || 0,
         });
-        if (!this.il2CppContext) this.searchWasmBinary(bufferSource);
+        if (!this.il2CppContext || !this.hasWasmStructure()) {
+          this.searchWasmBinary(bufferSource);
+        }
         if (!this.il2CppContext) {
           this.diag("il2cpp context unavailable");
           reject(new Error("Unable to create or load IL2CPP context"));
@@ -808,11 +810,17 @@ export class Runtime {
           hit: Boolean(cachedIl2CppFunctionCache),
           wasmCacheKey: this.wasmCacheKey,
         });
-        const hasHooks = this.plugins.some((plugin) => plugin.hooks.length > 0);
+        const hasPendingMethodProbes = this.plugins.some(
+          (plugin) => plugin.hasPendingMethodProbes,
+        );
+        const hasHooks =
+          hasPendingMethodProbes ||
+          this.plugins.some((plugin) => plugin.hooks.length > 0);
         const hasBytecodePatches = this.plugins.some(
           (plugin) => plugin.bytecodePatches.length > 0,
         );
         if (!cachedIl2CppFunctionCache || hasHooks || hasBytecodePatches) {
+          this.resetWasmStructureCache();
           const wailPreparser = new WailParser(bufferUint8Array);
           wailPreparser._optionalSectionFlags |= 1 << SECTION_CODE;
           wailPreparser._optionalSectionFlags |= 1 << SECTION_ELEMENT;
@@ -822,6 +830,10 @@ export class Runtime {
           wailPreparser.parse();
           this.wasmImportFunctionCount =
             (wailPreparser as any)._importFuncCount || 0;
+          this.syncWasmStructureFromRuntime();
+          for (const plugin of this.plugins) {
+            plugin.expandPendingMethodProbes();
+          }
         }
         if (cachedIl2CppFunctionCache) {
           this.resolvedIl2CppFunctions =
@@ -919,6 +931,7 @@ export class Runtime {
             usePlugin.version,
           );
           usePlugin.expandPendingUpdateProbes();
+          usePlugin.expandPendingMethodProbes();
           this.applyBytecodePatches(wail, usePlugin);
           var j = 0,
             hookLen = usePlugin.hooks.length;
@@ -1975,6 +1988,47 @@ export class Runtime {
     this.saveIl2CppContext();
   }
 
+  private resetWasmStructureCache() {
+    this.internalMappings = undefined;
+    this.internalWasmTypes = undefined;
+    this.internalWasmFunctions = undefined;
+    this.internalWasmCode = undefined;
+
+    const pageRuntime = getPageWindow()?.UnityWebModkit?.Runtime;
+    if (pageRuntime) {
+      pageRuntime.internalMappings = undefined;
+      pageRuntime.internalWasmTypes = undefined;
+      pageRuntime.internalWasmFunctions = undefined;
+      pageRuntime.internalWasmCode = undefined;
+    }
+  }
+
+  private syncWasmStructureFromRuntime() {
+    const pageRuntime = getPageWindow()?.UnityWebModkit?.Runtime;
+    if (pageRuntime && pageRuntime !== this) {
+      this.internalMappings = pageRuntime.internalMappings;
+      this.internalWasmTypes = pageRuntime.internalWasmTypes;
+      this.internalWasmFunctions = pageRuntime.internalWasmFunctions;
+      this.internalWasmCode = pageRuntime.internalWasmCode;
+    }
+    this.diag("wasm structure cache", {
+      mappings: this.internalMappings?.[0]?.elements?.length || 0,
+      types: this.internalWasmTypes?.length || 0,
+      functions: this.internalWasmFunctions?.length || 0,
+      code: this.internalWasmCode?.length || 0,
+      imports: this.wasmImportFunctionCount,
+    });
+  }
+
+  private hasWasmStructure() {
+    return Boolean(
+      this.internalMappings?.[0]?.elements?.length &&
+        this.internalWasmTypes?.length &&
+        this.internalWasmFunctions?.length &&
+        this.internalWasmCode?.length,
+    );
+  }
+
   private makeWasmCacheKey(bufferSource: ArrayBuffer) {
     const bytes = new Uint8Array(bufferSource);
     let hash = 2166136261;
@@ -2942,6 +2996,28 @@ export class Runtime {
     return entries.filter((entry) => candidateTypes.has(entry.typeName));
   }
 
+  public getMethodWasmType(targetClass: string, targetMethod: string) {
+    const tableIndex = this.getTableIndex(targetClass, targetMethod);
+    if (!this.isValidTableIndex(tableIndex)) return undefined;
+    const internalIndex = this.getInternalIndex(tableIndex);
+    if (!this.isValidInternalIndex(internalIndex)) return undefined;
+    const bodyIndex = internalIndex + 1;
+    const bodyType = this.getWasmFunctionTypeByGlobalIndex(bodyIndex);
+    const tableType = this.getWasmFunctionTypeByGlobalIndex(internalIndex);
+    const type = bodyType || tableType;
+    if (!type) return undefined;
+    return {
+      params: Array.from(type.params || []),
+      returnType: type.returnType,
+      tableIndex,
+      internalIndex: bodyType ? bodyIndex : internalIndex,
+    };
+  }
+
+  public isWasmStructureReady() {
+    return this.hasWasmStructure();
+  }
+
   public findMethods(pattern: string) {
     const needle = pattern.toLowerCase();
     return this.listMethods().filter(
@@ -3187,6 +3263,7 @@ export class Runtime {
   }
 
   private getInternalIndex(tableIndex: number): number {
+    if (!this.internalMappings?.[0]?.elements) return -1;
     return this.internalMappings[0].elements[tableIndex - 1];
   }
 
@@ -3247,7 +3324,8 @@ export class Runtime {
   private shouldUseIndirectOnlyHooks() {
     return (
       this.plugins.length > 0 &&
-      this.plugins.every((plugin) => plugin.preferIndirectHooks)
+      this.plugins.every((plugin) => plugin.preferIndirectHooks) &&
+      !this.plugins.some((plugin) => plugin.hasPendingMethodProbes)
     );
   }
 }
@@ -3328,7 +3406,19 @@ export type UpdateProbeOptions = {
   sharedBodyFallback?: boolean;
 };
 
-export type UpdateProbeHit = {
+export type MethodProbeOptions = {
+  typeName?: string;
+  typePattern?: string | RegExp;
+  methodPattern?: string | RegExp;
+  methodNames?: string[];
+  maxHooks?: number;
+  logEvery?: number;
+  directFallback?: boolean;
+  sharedBodyFallback?: boolean;
+  includeReturns?: boolean;
+};
+
+export type MethodProbeHit = {
   typeName: string;
   methodName: string;
   hook: any;
@@ -3336,11 +3426,20 @@ export type UpdateProbeHit = {
   args: ValueWrapper[];
 };
 
-type UpdateProbeCallback = (hit: UpdateProbeHit) => void;
+export type UpdateProbeHit = MethodProbeHit;
+
+type MethodProbeCallback = (hit: MethodProbeHit) => void;
+type UpdateProbeCallback = MethodProbeCallback;
 
 type PendingUpdateProbe = {
   options: UpdateProbeOptions;
   callback?: UpdateProbeCallback;
+  hooks: Hook[];
+};
+
+type PendingMethodProbe = {
+  options: MethodProbeOptions;
+  callback?: MethodProbeCallback;
   hooks: Hook[];
 };
 
@@ -3393,6 +3492,7 @@ class ModkitPlugin {
   private _importHooks: ImportHook[] = [];
   private _bytecodePatches: BytecodePatch[] = [];
   private _pendingUpdateProbes: PendingUpdateProbe[] = [];
+  private _pendingMethodProbes: PendingMethodProbe[] = [];
   private _runtime: Runtime;
   public readonly objects: ObjectQueryApi;
 
@@ -3422,6 +3522,10 @@ class ModkitPlugin {
 
   public get bytecodePatches() {
     return this._bytecodePatches;
+  }
+
+  public get hasPendingMethodProbes() {
+    return this._pendingMethodProbes.length > 0;
   }
 
   public get referencedAssemblies() {
@@ -3470,10 +3574,45 @@ class ModkitPlugin {
     return hooks;
   }
 
+  public probeTypeHooks(
+    options: MethodProbeOptions = {},
+    callback?: MethodProbeCallback,
+  ): Hook[] {
+    const hooks: Hook[] = [];
+    if (
+      this.listMethods().length === 0 ||
+      !this._runtime.isWasmStructureReady()
+    ) {
+      this._pendingMethodProbes.push({ options, callback, hooks });
+      this.logger.info("[PROBE] queued method hook probe until wasm metadata is ready");
+      return hooks;
+    }
+    this.installMethodProbeHooks(options, callback, hooks);
+    return hooks;
+  }
+
+  public probeMethodHooks(
+    options: MethodProbeOptions = {},
+    callback?: MethodProbeCallback,
+  ): Hook[] {
+    return this.probeTypeHooks(options, callback);
+  }
+
   public expandPendingUpdateProbes() {
     const probes = this._pendingUpdateProbes.splice(0);
     for (const probe of probes) {
       this.installUpdateProbeHooks(
+        probe.options,
+        probe.callback,
+        probe.hooks,
+      );
+    }
+  }
+
+  public expandPendingMethodProbes() {
+    const probes = this._pendingMethodProbes.splice(0);
+    for (const probe of probes) {
+      this.installMethodProbeHooks(
         probe.options,
         probe.callback,
         probe.hooks,
@@ -3553,6 +3692,123 @@ class ModkitPlugin {
       "[PROBE] installed %d update hook(s) %o",
       hooks.length,
       candidates.map((method: any) => `${method.typeName}.${method.name}`),
+    );
+  }
+
+  private installMethodProbeHooks(
+    options: MethodProbeOptions,
+    callback: MethodProbeCallback | undefined,
+    hooks: Hook[],
+  ) {
+    const maxHooks = options.maxHooks ?? 120;
+    const logEvery = Math.max(1, options.logEvery ?? 60);
+    const typeMatches = this.makeProbeMatcher(
+      options.typePattern || options.typeName,
+    );
+    const methodMatches = this.makeProbeMatcher(options.methodPattern);
+    const methodNames = options.methodNames
+      ? new Set(options.methodNames.map((name) => name.toLowerCase()))
+      : undefined;
+    const includeReturns = options.includeReturns !== false;
+
+    const allMethods = this.listMethods();
+    const matchedMethods = allMethods.filter((method: any) => {
+        if (typeMatches && !typeMatches(method.typeName)) return false;
+        if (methodMatches && !methodMatches(method.name)) return false;
+        if (
+          methodNames &&
+          !methodNames.has(this.getProbeBaseMethodName(method.name).toLowerCase()) &&
+          !methodNames.has(method.name.toLowerCase())
+        ) {
+          return false;
+        }
+        return true;
+      });
+    const typedMethods = matchedMethods.map((method: any) => {
+        const wasmType = this._runtime.getMethodWasmType(
+          method.typeName,
+          method.name,
+        );
+        return { method, wasmType };
+      });
+    const supportedMethods = typedMethods.filter(({ wasmType }: any) => {
+        if (!wasmType) return false;
+        if (!wasmType.params?.every((param: string) => param === "i32")) {
+          return false;
+        }
+        if (!includeReturns && wasmType.returnType) return false;
+        return true;
+      });
+    const candidates = supportedMethods
+      .slice(0, maxHooks);
+
+    this.diag("probe.method candidates", {
+      typeName: options.typeName,
+      typePattern: options.typePattern,
+      methodPattern: options.methodPattern,
+      allMethods: allMethods.length,
+      matchedMethods: matchedMethods.length,
+      typedMethods: typedMethods.filter(({ wasmType }: any) => Boolean(wasmType))
+        .length,
+      supportedMethods: supportedMethods.length,
+      includeReturns,
+      sample: typedMethods.slice(0, 16).map(({ method, wasmType }: any) => ({
+        typeName: method.typeName,
+        name: method.name,
+        tableIndex: method.tableIndex,
+        wasmType,
+      })),
+    });
+
+    for (const { method, wasmType } of candidates as any[]) {
+      let hook: Hook;
+      hook = this.hookPrefix(
+        {
+          typeName: method.typeName,
+          methodName: method.name,
+          params: wasmType.params,
+          returnType: wasmType.returnType,
+          sharedBodyFallback: options.sharedBodyFallback !== false,
+        },
+        (...args: any[]) => {
+          const wrappedArgs = args.map((arg) =>
+            arg instanceof ValueWrapper ? arg : new ValueWrapper(arg),
+          );
+          const callCount = hook.callCount || 0;
+          if (callback) {
+            callback({
+              typeName: method.typeName,
+              methodName: method.name,
+              hook,
+              callCount,
+              args: wrappedArgs,
+            });
+            return;
+          }
+          if (callCount <= 5 || callCount % logEvery === 0) {
+            this.logger.info(
+              "[PROBE] %s.%s hit #%d %o",
+              method.typeName,
+              method.name,
+              callCount,
+              wrappedArgs.map((arg) => arg.val()),
+            );
+          }
+        },
+      );
+      hook.skipDirectFallback = options.directFallback !== true;
+      hooks.push(hook);
+    }
+
+    this.logger.info(
+      "[PROBE] installed %d method hook(s) %o",
+      hooks.length,
+      candidates.map(
+        ({ method, wasmType }: any) =>
+          `${method.typeName}.${method.name}(${wasmType.params.join(",")})${
+            wasmType.returnType ? `:${wasmType.returnType}` : ""
+          }`,
+      ),
     );
   }
 
@@ -3778,6 +4034,10 @@ class ModkitPlugin {
 
   public findMethods(pattern: string) {
     return this._runtime.findMethods(pattern);
+  }
+
+  public getMethodWasmType(targetClass: string, targetMethod: string) {
+    return this._runtime.getMethodWasmType(targetClass, targetMethod);
   }
 
   public findTypes(pattern: string) {

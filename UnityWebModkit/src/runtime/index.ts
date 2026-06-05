@@ -82,6 +82,7 @@ export class Runtime {
   private wasmCacheKey = "";
   private wasmImportFunctionCount = 0;
   private bodyHookPatchedTargets = new Map<number, Hook[]>();
+  private bodyHookAliasCache?: Map<number, string[]>;
   private stringNewEncoding: "utf8" | "utf16" = "utf8";
   private allocationRegistry?: {
     register(target: object, heldValue: number, unregisterToken?: object): void;
@@ -735,6 +736,7 @@ export class Runtime {
           metadata: this.metadata,
         });
         this.bodyHookPatchedTargets.clear();
+        this.bodyHookAliasCache = undefined;
         await this.readIl2CppContextFromStorage().catch(() => undefined);
         this.diag("il2cpp context after cache", {
           hasContext: Boolean(this.il2CppContext),
@@ -905,6 +907,7 @@ export class Runtime {
         const replacementFuncIndexes: WailVariable[] = [];
         const oldFuncIndexes: WailVariable[] = [];
         const patchedHooks: Hook[] = [];
+        const runtimeTableFallbackHooks: Hook[] = [];
         const hookRewriteCounts: number[] = [];
         var i = 0,
           pluginLen = this.plugins.length;
@@ -1036,6 +1039,11 @@ export class Runtime {
               ++j;
               continue;
             }
+            if (useHook.runtimeTableFallbackOnly) {
+              runtimeTableFallbackHooks.push(useHook);
+              ++j;
+              continue;
+            }
             if (useHook.skipDirectFallback) {
               useHook.enabled = false;
               useHook.applied = true;
@@ -1122,7 +1130,13 @@ export class Runtime {
                 (instantiatedSource as any).instance.exports,
               );
             const unappliedHooks = this.getUnappliedHooks();
-            unappliedHooks.forEach((hook) => {
+            const fallbackHooks = [
+              ...new Set([
+                ...runtimeTableFallbackHooks,
+                ...unappliedHooks,
+              ]),
+            ];
+            fallbackHooks.forEach((hook) => {
               if (
                 !this.applyIndirectHook(instantiatedSource, hook, tableName)
               ) {
@@ -1503,6 +1517,19 @@ export class Runtime {
       });
       return false;
     }
+    const aliases = this.getBodyHookAliases(hook);
+    if (aliases.length > 1) {
+      hook.runtimeTableFallbackOnly = true;
+      this.diag("hook.body skipped shared target; using table fallback", {
+        typeName: hook.typeName,
+        methodName: hook.methodName,
+        tableIndex: hook.tableIndex,
+        internalIndex: hook.index,
+        aliasCount: aliases.length,
+        aliases: aliases.slice(0, 16),
+      });
+      return false;
+    }
     const existingTargets = targets.filter((target) =>
       this.bodyHookPatchedTargets.has(target.globalIndex)
     );
@@ -1654,6 +1681,23 @@ export class Runtime {
         locals: string[];
         instructions: Uint8Array[];
       } => Boolean(target));
+  }
+
+  private getBodyHookAliases(hook: Hook) {
+    if (!this.isValidInternalIndex(hook.index)) return [];
+    if (!this.bodyHookAliasCache) {
+      const aliases = new Map<number, string[]>();
+      for (const method of this.listMethods()) {
+        const tableIndex = this.getTableIndex(method.typeName, method.name);
+        if (!this.isValidTableIndex(tableIndex)) continue;
+        const internalIndex = this.getInternalIndex(tableIndex);
+        const methods = aliases.get(internalIndex) || [];
+        methods.push(`${method.typeName}.${method.name}`);
+        aliases.set(internalIndex, methods);
+      }
+      this.bodyHookAliasCache = aliases;
+    }
+    return this.bodyHookAliasCache.get(hook.index) || [];
   }
 
   private makeLocalGetInstructions(count: number) {
@@ -3111,6 +3155,7 @@ type Hook = {
   bodyPatched?: boolean;
   bodyPatchTargets?: number[];
   skipDirectFallback?: boolean;
+  runtimeTableFallbackOnly?: boolean;
   callCount?: number;
   lastArgs?: number[];
   typeName: string;

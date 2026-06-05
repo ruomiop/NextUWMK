@@ -261,6 +261,18 @@ function readUlebFromInstruction(instruction) {
   runtime.searchWasmBinary(wasmBuffer);
   const tableIndex = runtime.getTableIndex(typeName, methodName);
   const tableSlot = runtime.getTableSlot(tableIndex);
+  const offlineTableLength =
+    tableSlot === undefined ? 1 : Math.max(1, tableSlot + 1);
+  const offlineTable = new WebAssembly.Table({
+    element: "anyfunc",
+    initial: offlineTableLength,
+  });
+  if (tableSlot !== undefined) {
+    offlineTable.set(
+      tableSlot,
+      runtime.makeWasmFunc(["i32", "i32"], [], () => undefined),
+    );
+  }
 
   let instantiateCalls = 0;
   let compileError;
@@ -276,7 +288,7 @@ function readUlebFromInstruction(instruction) {
       module: {},
       instance: {
         exports: {
-          table: new WebAssembly.Table({ element: "anyfunc", initial: 1 }),
+          table: offlineTable,
         },
       },
       __offlinePatchedByteLength: bufferSource.byteLength,

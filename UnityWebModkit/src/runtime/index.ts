@@ -1152,6 +1152,16 @@ export class Runtime {
               const invokerApplied = hook.tryInvokerFallback
                 ? this.applyInvokerHook(instantiatedSource, hook, tableName)
                 : false;
+              this.diag("hook.runtime fallback", {
+                typeName: hook.typeName,
+                methodName: hook.methodName,
+                tableIndex: hook.tableIndex,
+                methodTableApplied,
+                tryInvokerFallback: hook.tryInvokerFallback === true,
+                invokerApplied,
+                invokerTableIndex: hook.invokerTableIndex,
+                invokerFallbackApplied: hook.invokerFallbackApplied === true,
+              });
               if (!methodTableApplied && !invokerApplied) {
                 this.logger.warn(
                   "Hook %s.%s was not applied",
@@ -1572,10 +1582,12 @@ export class Runtime {
 
     const originalTableIndex = hook.tableIndex;
     const originalTableSlot = hook.tableSlot;
+    const originalIndex = hook.index;
     const originalParams = hook.params;
     const originalReturnType = hook.returnType;
     hook.tableIndex = invokerTableIndex;
     hook.tableSlot = undefined;
+    hook.index = invokerInternalIndex;
     hook.params = invokerType.params;
     hook.returnType = invokerType.returnType;
     const applied = this.applyIndirectHook(instantiatedSource, hook, tableName);
@@ -1594,6 +1606,7 @@ export class Runtime {
     }
     hook.tableIndex = originalTableIndex;
     hook.tableSlot = originalTableSlot;
+    hook.index = originalIndex;
     hook.params = originalParams;
     hook.returnType = originalReturnType;
     return false;
@@ -3506,6 +3519,7 @@ export type UpdateProbeOptions = {
   maxHooks?: number;
   logEvery?: number;
   directFallback?: boolean;
+  invokerFallback?: boolean;
   sharedBodyFallback?: boolean;
 };
 
@@ -3517,6 +3531,7 @@ export type MethodProbeOptions = {
   maxHooks?: number;
   logEvery?: number;
   directFallback?: boolean;
+  invokerFallback?: boolean;
   sharedBodyFallback?: boolean;
   includeReturns?: boolean;
 };
@@ -3762,6 +3777,7 @@ class ModkitPlugin {
           methodName: method.name,
           tableIndex: method.tableIndex,
           params,
+          invokerFallback: options.invokerFallback !== false,
           sharedBodyFallback: options.sharedBodyFallback !== false,
         },
         (...args: any[]) => {
@@ -3790,6 +3806,7 @@ class ModkitPlugin {
           }
         },
       );
+      hook.tryInvokerFallback = options.invokerFallback !== false;
       hook.skipDirectFallback = options.directFallback !== true;
       hooks.push(hook);
     }
@@ -3876,6 +3893,7 @@ class ModkitPlugin {
           tableIndex: method.tableIndex,
           params: wasmType.params,
           returnType: wasmType.returnType,
+          invokerFallback: options.invokerFallback !== false,
           sharedBodyFallback: options.sharedBodyFallback !== false,
         },
         (...args: any[]) => {
@@ -3904,9 +3922,9 @@ class ModkitPlugin {
           }
         },
       );
+      hook.tryInvokerFallback = options.invokerFallback !== false;
       if (wasmType.returnType && options.directFallback !== true) {
         hook.runtimeTableFallbackOnly = true;
-        hook.tryInvokerFallback = true;
       }
       hook.skipDirectFallback = wasmType.returnType
         ? options.directFallback === false

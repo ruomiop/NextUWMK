@@ -1050,6 +1050,7 @@ export class Runtime {
                 importObject,
               )
             ) {
+              runtimeTableFallbackHooks.push(useHook);
               ++j;
               continue;
             }

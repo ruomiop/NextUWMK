@@ -3918,7 +3918,7 @@ class ModkitPlugin {
       params: target.params,
       returnType: target.returnType,
       sharedBodyFallback:
-        target.sharedBodyFallback !== false && target.allowSharedBody !== false,
+        target.sharedBodyFallback === true || target.allowSharedBody === true,
       applied: false,
       enabled: true,
       kind,

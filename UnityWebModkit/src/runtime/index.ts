@@ -84,6 +84,7 @@ export class Runtime {
   private bodyHookPatchedTargets = new Map<number, Hook[]>();
   private bodyHookAliasCache?: Map<number, string[]>;
   private bodyHookDispatchLogged = new Set<number>();
+  private indirectHookDispatchLogged = new Set<string>();
   private stringNewEncoding: "utf8" | "utf16" = "utf8";
   private allocationRegistry?: {
     register(target: object, heldValue: number, unregisterToken?: object): void;
@@ -739,6 +740,7 @@ export class Runtime {
         this.bodyHookPatchedTargets.clear();
         this.bodyHookAliasCache = undefined;
         this.bodyHookDispatchLogged.clear();
+        this.indirectHookDispatchLogged.clear();
         await this.readIl2CppContextFromStorage().catch(() => undefined);
         this.diag("il2cpp context after cache", {
           hasContext: Boolean(this.il2CppContext),
@@ -1450,6 +1452,7 @@ export class Runtime {
       ? (...args: number[]) => {
           hook.callCount = (hook.callCount || 0) + 1;
           hook.lastArgs = Array.from(args);
+          this.logIndirectHookDispatch(hook, slot, args);
           if (!hook.enabled) {
             return effectiveReturnType
               ? originalFunc(...args)
@@ -1468,6 +1471,7 @@ export class Runtime {
       : (...args: number[]) => {
           hook.callCount = (hook.callCount || 0) + 1;
           hook.lastArgs = Array.from(args);
+          this.logIndirectHookDispatch(hook, slot, args);
           let originalResult = originalFunc(...args);
           if (!hook.enabled)
             return effectiveReturnType ? originalResult : undefined;
@@ -1517,6 +1521,20 @@ export class Runtime {
         originalFunc === expectedOriginalFunc,
     });
     return true;
+  }
+
+  private logIndirectHookDispatch(hook: Hook, slot: number, args: number[]) {
+    const key = `${hook.typeName}.${hook.methodName}:${hook.tableIndex}:${slot}`;
+    if (this.indirectHookDispatchLogged.has(key)) return;
+    this.indirectHookDispatchLogged.add(key);
+    this.diag("hook.indirect dispatch", {
+      typeName: hook.typeName,
+      methodName: hook.methodName,
+      tableIndex: hook.tableIndex,
+      tableSlot: slot,
+      callCount: hook.callCount || 0,
+      args: Array.from(args),
+    });
   }
 
   private applyInvokerHook(
@@ -1827,7 +1845,9 @@ export class Runtime {
     if (!this.bodyHookAliasCache) {
       const aliases = new Map<number, string[]>();
       for (const method of this.listMethods()) {
-        const tableIndex = this.getTableIndex(method.typeName, method.name);
+        const tableIndex =
+          method.tableIndex ||
+          this.getTableIndex(method.typeName, method.name);
         if (!this.isValidTableIndex(tableIndex)) continue;
         const internalIndex = this.getInternalIndex(tableIndex);
         const methods = aliases.get(internalIndex) || [];
@@ -1930,7 +1950,13 @@ export class Runtime {
         });
         return slot;
       }
-      if (!expectedOriginalFunc && typeof value === "function") return slot;
+      if (
+        !expectedOriginalFunc &&
+        slotInternalIndex === undefined &&
+        typeof value === "function"
+      ) {
+        return slot;
+      }
     }
 
     if (expectedOriginalFunc) {

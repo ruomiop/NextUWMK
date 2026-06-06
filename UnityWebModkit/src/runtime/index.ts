@@ -1845,8 +1845,8 @@ export class Runtime {
   ) {
     if (!this.isValidTableIndex(hook.tableIndex)) return undefined;
     const candidates = [
-      hook.tableIndex,
       hook.tableIndex - 1,
+      hook.tableIndex,
       hook.tableSlot,
     ].filter((slot): slot is number => typeof slot === "number").filter(
       (slot, index, slots) =>
@@ -3290,7 +3290,7 @@ export class Runtime {
 
   private getInternalIndexForTableSlot(slot: number): number | undefined {
     if (!this.internalMappings?.[0]?.elements) return undefined;
-    return this.internalMappings[0].elements[slot - 1];
+    return this.internalMappings[0].elements[slot];
   }
 
   public getTableSlot(
@@ -3298,7 +3298,7 @@ export class Runtime {
     table?: WebAssembly.Table,
   ): number | undefined {
     if (!this.isValidTableIndex(tableIndex)) return undefined;
-    const slot = tableIndex;
+    const slot = tableIndex - 1;
     if (table && (slot < 0 || slot >= table.length)) return undefined;
     return slot;
   }

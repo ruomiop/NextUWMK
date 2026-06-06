@@ -3777,7 +3777,7 @@ class ModkitPlugin {
           methodName: method.name,
           tableIndex: method.tableIndex,
           params,
-          invokerFallback: options.invokerFallback !== false,
+          invokerFallback: options.invokerFallback === true,
           sharedBodyFallback: options.sharedBodyFallback !== false,
         },
         (...args: any[]) => {
@@ -3806,7 +3806,7 @@ class ModkitPlugin {
           }
         },
       );
-      hook.tryInvokerFallback = options.invokerFallback !== false;
+      hook.tryInvokerFallback = options.invokerFallback === true;
       hook.skipDirectFallback = options.directFallback !== true;
       hooks.push(hook);
     }
@@ -3893,7 +3893,7 @@ class ModkitPlugin {
           tableIndex: method.tableIndex,
           params: wasmType.params,
           returnType: wasmType.returnType,
-          invokerFallback: options.invokerFallback !== false,
+          invokerFallback: options.invokerFallback === true,
           sharedBodyFallback: options.sharedBodyFallback !== false,
         },
         (...args: any[]) => {
@@ -3922,7 +3922,7 @@ class ModkitPlugin {
           }
         },
       );
-      hook.tryInvokerFallback = options.invokerFallback !== false;
+      hook.tryInvokerFallback = options.invokerFallback === true;
       if (wasmType.returnType && options.directFallback !== true) {
         hook.runtimeTableFallbackOnly = true;
       }

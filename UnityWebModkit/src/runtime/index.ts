@@ -1152,11 +1152,13 @@ export class Runtime {
               ]),
             ];
             fallbackHooks.forEach((hook) => {
-              const methodTableApplied = this.applyIndirectHook(
-                instantiatedSource,
-                hook,
-                tableName,
-              );
+              const methodTableApplied = hook.invokerFallbackOnly
+                ? false
+                : this.applyIndirectHook(
+                  instantiatedSource,
+                  hook,
+                  tableName,
+                );
               const invokerApplied = hook.runtimeTableFallbackOnly
                 ? this.applyInvokerHook(instantiatedSource, hook, tableName)
                 : false;
@@ -1606,7 +1608,8 @@ export class Runtime {
       hook.sharedBodyAliasCount = aliases.length;
       if (!hook.sharedBodyFallback) {
         hook.runtimeTableFallbackOnly = true;
-        this.diag("hook.body skipped shared target; using table fallback", {
+        hook.invokerFallbackOnly = true;
+        this.diag("hook.body skipped shared target; using invoker fallback", {
           typeName: hook.typeName,
           methodName: hook.methodName,
           tableIndex: hook.tableIndex,
@@ -3364,6 +3367,7 @@ type Hook = {
   sharedBodyFallback?: boolean;
   sharedBodyAliasCount?: number;
   runtimeTableFallbackOnly?: boolean;
+  invokerFallbackOnly?: boolean;
   invokerFallbackApplied?: boolean;
   invokerTableIndex?: number;
   invokerInternalIndex?: number;

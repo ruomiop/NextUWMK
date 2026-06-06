@@ -83,6 +83,7 @@ export class Runtime {
   private wasmImportFunctionCount = 0;
   private bodyHookPatchedTargets = new Map<number, Hook[]>();
   private bodyHookAliasCache?: Map<number, string[]>;
+  private bodyHookDispatchLogged = new Set<number>();
   private stringNewEncoding: "utf8" | "utf16" = "utf8";
   private allocationRegistry?: {
     register(target: object, heldValue: number, unregisterToken?: object): void;
@@ -737,6 +738,7 @@ export class Runtime {
         });
         this.bodyHookPatchedTargets.clear();
         this.bodyHookAliasCache = undefined;
+        this.bodyHookDispatchLogged.clear();
         await this.readIl2CppContextFromStorage().catch(() => undefined);
         this.diag("il2cpp context after cache", {
           hasContext: Boolean(this.il2CppContext),
@@ -1670,6 +1672,18 @@ export class Runtime {
         ),
       ];
       const activeHooks = dispatchHooks.length > 0 ? dispatchHooks : [hook];
+      for (const target of patchedTargets) {
+        if (this.bodyHookDispatchLogged.has(target)) continue;
+        this.bodyHookDispatchLogged.add(target);
+        this.diag("hook.body dispatch", {
+          target,
+          hookCount: activeHooks.length,
+          hooks: activeHooks
+            .slice(0, 24)
+            .map((item) => `${item.typeName}.${item.methodName}`),
+          args,
+        });
+      }
       const wrappedArgs = args.map((arg) => new ValueWrapper(arg));
       for (const activeHook of activeHooks) {
         activeHook.callCount = (activeHook.callCount || 0) + 1;
@@ -1738,6 +1752,13 @@ export class Runtime {
       const hooks = this.bodyHookPatchedTargets.get(target) || [];
       if (!hooks.includes(hook)) hooks.push(hook);
       this.bodyHookPatchedTargets.set(target, hooks);
+      this.diag("hook.body registered", {
+        target,
+        hookCount: hooks.length,
+        hooks: hooks
+          .slice(0, 24)
+          .map((item) => `${item.typeName}.${item.methodName}`),
+      });
     }
   }
 

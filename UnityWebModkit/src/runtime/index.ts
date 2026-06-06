@@ -1157,7 +1157,7 @@ export class Runtime {
                 hook,
                 tableName,
               );
-              const invokerApplied = hook.runtimeTableFallbackOnly
+              const invokerApplied = hook.tryInvokerFallback
                 ? this.applyInvokerHook(instantiatedSource, hook, tableName)
                 : false;
               if (!methodTableApplied && !invokerApplied) {
@@ -1448,13 +1448,20 @@ export class Runtime {
     hook.callCount = hook.callCount || 0;
     hook.lastArgs = hook.lastArgs || [];
 
-    const hookResults = hook.returnType ? [hook.returnType] : [];
+    const runtimeType = this.isValidInternalIndex(hook.index)
+      ? this.getWasmFunctionTypeByGlobalIndex((hook.index as number) + 1)
+      : undefined;
+    const effectiveParams = Array.isArray(runtimeType?.params)
+      ? runtimeType.params
+      : hook.params;
+    const effectiveReturnType = runtimeType?.returnType || hook.returnType;
+    const hookResults = effectiveReturnType ? [effectiveReturnType] : [];
     const jsImpl = !hook.kind
       ? (...args: number[]) => {
           hook.callCount = (hook.callCount || 0) + 1;
           hook.lastArgs = Array.from(args);
           if (!hook.enabled) {
-            return hook.returnType
+            return effectiveReturnType
               ? originalFunc(...args)
               : originalFunc(...args);
           }
@@ -1462,18 +1469,18 @@ export class Runtime {
           const result = hook.callback(...wrappedArgs);
           args = wrappedArgs.map((arg) => arg.val());
           if (result === undefined || result === true) {
-            return hook.returnType
+            return effectiveReturnType
               ? originalFunc(...args)
               : originalFunc(...args);
           }
-          return hook.returnType ? 0 : undefined;
+          return effectiveReturnType ? 0 : undefined;
         }
       : (...args: number[]) => {
           hook.callCount = (hook.callCount || 0) + 1;
           hook.lastArgs = Array.from(args);
           let originalResult = originalFunc(...args);
           if (!hook.enabled)
-            return hook.returnType ? originalResult : undefined;
+            return effectiveReturnType ? originalResult : undefined;
           if (originalResult !== undefined)
             originalResult = new ValueWrapper(originalResult);
           const wrappedArgs = args.map((arg) => new ValueWrapper(arg));
@@ -1484,7 +1491,7 @@ export class Runtime {
     try {
       table.set(
         slot,
-        this.makeWasmFunc(hook.params, hookResults, jsImpl),
+        this.makeWasmFunc(effectiveParams, hookResults, jsImpl),
       );
     } catch (err) {
       this.diag("hook.indirect table.set failed", {
@@ -1494,8 +1501,9 @@ export class Runtime {
         tableSource,
         tableIndex: hook.tableIndex,
         tableSlot: slot,
-        params: hook.params,
+        params: effectiveParams,
         results: hookResults,
+        runtimeType,
         error: err instanceof Error ? err.message : String(err),
       });
       return false;
@@ -1512,6 +1520,9 @@ export class Runtime {
       tableLength: table.length,
       oldFuncIndex: hook.oldFuncIndex,
       originalExportName: hook.originalExportName,
+      params: effectiveParams,
+      results: hookResults,
+      runtimeType,
       matchedOriginalExport: Boolean(expectedOriginalFunc) &&
         originalFunc === expectedOriginalFunc,
     });
@@ -3371,6 +3382,7 @@ type Hook = {
   sharedBodyFallback?: boolean;
   sharedBodyAliasCount?: number;
   runtimeTableFallbackOnly?: boolean;
+  tryInvokerFallback?: boolean;
   invokerFallbackApplied?: boolean;
   invokerTableIndex?: number;
   invokerInternalIndex?: number;
@@ -3419,6 +3431,9 @@ export type HookInfo = {
   methodName: string;
   params: string[];
   returnType?: string;
+  directFallback?: boolean;
+  runtimeTableFallback?: boolean;
+  invokerFallback?: boolean;
   sharedBodyFallback?: boolean;
   allowSharedBody?: boolean;
 };
@@ -3826,6 +3841,7 @@ class ModkitPlugin {
       );
       if (wasmType.returnType && options.directFallback !== true) {
         hook.runtimeTableFallbackOnly = true;
+        hook.tryInvokerFallback = true;
       }
       hook.skipDirectFallback = wasmType.returnType
         ? options.directFallback === false
@@ -3926,6 +3942,9 @@ class ModkitPlugin {
       returnType: target.returnType,
       sharedBodyFallback:
         target.sharedBodyFallback === true || target.allowSharedBody === true,
+      runtimeTableFallbackOnly: target.runtimeTableFallback !== false,
+      tryInvokerFallback: target.invokerFallback === true,
+      skipDirectFallback: target.directFallback !== true,
       applied: false,
       enabled: true,
       kind,

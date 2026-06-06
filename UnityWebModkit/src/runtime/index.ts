@@ -1152,13 +1152,11 @@ export class Runtime {
               ]),
             ];
             fallbackHooks.forEach((hook) => {
-              const methodTableApplied = hook.invokerFallbackOnly
-                ? false
-                : this.applyIndirectHook(
-                  instantiatedSource,
-                  hook,
-                  tableName,
-                );
+              const methodTableApplied = this.applyIndirectHook(
+                instantiatedSource,
+                hook,
+                tableName,
+              );
               const invokerApplied = hook.runtimeTableFallbackOnly
                 ? this.applyInvokerHook(instantiatedSource, hook, tableName)
                 : false;
@@ -1607,9 +1605,15 @@ export class Runtime {
     if (aliases.length > 1) {
       hook.sharedBodyAliasCount = aliases.length;
       if (!hook.sharedBodyFallback) {
-        hook.runtimeTableFallbackOnly = true;
-        hook.invokerFallbackOnly = true;
-        this.diag("hook.body skipped shared target; using invoker fallback", {
+        hook.enabled = false;
+        hook.applied = true;
+        this.logger.warn(
+          "Hook %s.%s was not applied because it resolves to a shared IL2CPP body (%d aliases). Use probe hooks or pass sharedBodyFallback: true only when shared dispatch is intended.",
+          hook.typeName,
+          hook.methodName,
+          aliases.length,
+        );
+        this.diag("hook.body skipped shared target", {
           typeName: hook.typeName,
           methodName: hook.methodName,
           tableIndex: hook.tableIndex,
@@ -1617,7 +1621,7 @@ export class Runtime {
           aliasCount: aliases.length,
           aliases: aliases.slice(0, 16),
         });
-        return false;
+        return true;
       }
       this.diag("hook.body shared target; applying shared fallback", {
         typeName: hook.typeName,
@@ -3367,7 +3371,6 @@ type Hook = {
   sharedBodyFallback?: boolean;
   sharedBodyAliasCount?: number;
   runtimeTableFallbackOnly?: boolean;
-  invokerFallbackOnly?: boolean;
   invokerFallbackApplied?: boolean;
   invokerTableIndex?: number;
   invokerInternalIndex?: number;

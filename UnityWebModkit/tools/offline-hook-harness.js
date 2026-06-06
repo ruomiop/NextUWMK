@@ -29,6 +29,9 @@ const wasmFile = path.resolve(
 );
 const typeName = args.get("type") || "PlayerController";
 const methodName = args.get("method") || "Update";
+const explicitTableIndex = args.has("table-index")
+  ? Number(args.get("table-index"))
+  : undefined;
 
 const referencedAssemblies = (args.get("assemblies") || [
   "1v1.dll",
@@ -255,6 +258,9 @@ function readUlebFromInstruction(instruction) {
       methodName,
       params: ["i32", "i32"],
     };
+    if (Number.isFinite(explicitTableIndex) && explicitTableIndex > 0) {
+      baseHookInfo.tableIndex = explicitTableIndex;
+    }
     if (args.has("shared-body")) {
       baseHookInfo.sharedBodyFallback = args.get("shared-body") !== "false";
     }
@@ -278,7 +284,10 @@ function readUlebFromInstruction(instruction) {
   if (!metadataReady) throw new Error("Timed out waiting for metadata parse.");
 
   runtime.searchWasmBinary(wasmBuffer);
-  const tableIndex = runtime.getTableIndex(typeName, methodName);
+  const tableIndex =
+    Number.isFinite(explicitTableIndex) && explicitTableIndex > 0
+      ? explicitTableIndex
+      : runtime.getTableIndex(typeName, methodName);
   const tableSlot = runtime.getTableSlot(tableIndex);
   const invokerTableIndex = runtime.getInvokerTableIndex(typeName, methodName);
   const invokerTableSlot = runtime.getTableSlot(invokerTableIndex);
@@ -382,10 +391,9 @@ function readUlebFromInstruction(instruction) {
               ? runtime
                   .listMethods()
                   .filter((method) => {
-                    const methodTableIndex = runtime.getTableIndex(
-                      method.typeName,
-                      method.name,
-                    );
+                    const methodTableIndex =
+                      method.tableIndex ||
+                      runtime.getTableIndex(method.typeName, method.name);
                     return (
                       methodTableIndex > 0 &&
                       runtime.getInternalIndex(methodTableIndex) === item.internalIndex

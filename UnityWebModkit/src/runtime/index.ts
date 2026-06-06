@@ -774,10 +774,7 @@ export class Runtime {
               this.logger.info("Loading [%s %s]", plugin.name, plugin.version);
               plugin.expandPendingUpdateProbes();
               for (const hook of plugin.hooks) {
-                hook.tableIndex = this.getTableIndex(
-                  hook.typeName,
-                  hook.methodName,
-                );
+                hook.tableIndex = this.resolveHookTableIndex(hook);
                 if (!this.isValidTableIndex(hook.tableIndex)) {
                   this.logger.warn(
                     "Skipping hook %s.%s: unable to resolve table index",
@@ -883,10 +880,7 @@ export class Runtime {
                   plugin.version,
                 );
                 for (const hook of plugin.hooks) {
-                  hook.tableIndex = this.getTableIndex(
-                    hook.typeName,
-                    hook.methodName,
-                  );
+                  hook.tableIndex = this.resolveHookTableIndex(hook);
                   if (!this.isValidTableIndex(hook.tableIndex)) {
                     this.logger.warn(
                       "Skipping hook %s.%s: unable to resolve table index",
@@ -939,10 +933,7 @@ export class Runtime {
             hookLen = usePlugin.hooks.length;
           while (j < hookLen) {
             const useHook = usePlugin.hooks[j];
-            useHook.tableIndex = this.getTableIndex(
-              useHook.typeName,
-              useHook.methodName,
-            );
+            useHook.tableIndex = this.resolveHookTableIndex(useHook);
             if (!this.isValidTableIndex(useHook.tableIndex)) {
               this.logger.warn(
                 "Skipping hook %s.%s: unable to resolve table index",
@@ -1060,8 +1051,7 @@ export class Runtime {
               continue;
             }
             if (useHook.skipDirectFallback) {
-              useHook.enabled = false;
-              useHook.applied = true;
+              runtimeTableFallbackHooks.push(useHook);
               this.diag("hook.direct skipped by hook option", {
                 typeName: useHook.typeName,
                 methodName: useHook.methodName,
@@ -1246,7 +1236,7 @@ export class Runtime {
   private applyBytecodePatches(wail: WailParser, plugin: ModkitPlugin) {
     for (const patch of plugin.bytecodePatches) {
       if (!patch.enabled || patch.applied) continue;
-      patch.tableIndex = this.getTableIndex(patch.typeName, patch.methodName);
+      patch.tableIndex = this.resolveHookTableIndex(patch);
       if (!this.isValidTableIndex(patch.tableIndex)) {
         this.logger.warn(
           "Skipping bytecode patch %s.%s: unable to resolve table index",
@@ -1534,10 +1524,9 @@ export class Runtime {
     hook: Hook,
     tableName: string,
   ) {
-    const invokerTableIndex = this.getInvokerTableIndex(
-      hook.typeName,
-      hook.methodName,
-    );
+    const invokerTableIndex = this.isValidTableIndex(hook.invokerTableIndex)
+      ? hook.invokerTableIndex
+      : this.getInvokerTableIndex(hook.typeName, hook.methodName);
     if (!this.isValidTableIndex(invokerTableIndex)) {
       this.diag("hook.invoker skipped missing invoker", {
         typeName: hook.typeName,
@@ -2965,6 +2954,15 @@ export class Runtime {
     return result;
   }
 
+  private resolveHookTableIndex(target: {
+    tableIndex?: number;
+    typeName: string;
+    methodName: string;
+  }) {
+    if (this.isValidTableIndex(target.tableIndex)) return target.tableIndex;
+    return this.getTableIndex(target.typeName, target.methodName);
+  }
+
   public getFieldInfo(targetClass: string, fieldName: string) {
     const override = this.getFieldOffsetOverride(targetClass, fieldName);
     const fieldData = this.il2CppContext?.fieldData;
@@ -3053,8 +3051,14 @@ export class Runtime {
     return entries.filter((entry) => candidateTypes.has(entry.typeName));
   }
 
-  public getMethodWasmType(targetClass: string, targetMethod: string) {
-    const tableIndex = this.getTableIndex(targetClass, targetMethod);
+  public getMethodWasmType(
+    targetClass: string,
+    targetMethod: string,
+    tableIndex?: number,
+  ) {
+    tableIndex = this.isValidTableIndex(tableIndex)
+      ? tableIndex
+      : this.getTableIndex(targetClass, targetMethod);
     if (!this.isValidTableIndex(tableIndex)) return undefined;
     const internalIndex = this.getInternalIndex(tableIndex);
     if (!this.isValidInternalIndex(internalIndex)) return undefined;
@@ -3455,6 +3459,8 @@ type WasmExportEntry = {
 };
 
 export type HookInfo = {
+  tableIndex?: number;
+  invokerTableIndex?: number;
   typeName: string;
   methodName: string;
   params: string[];
@@ -3526,6 +3532,8 @@ export type MethodTarget =
   | {
       typeName: string;
       methodName: string;
+      tableIndex?: number;
+      invokerTableIndex?: number;
       returnType?: string;
     };
 
@@ -3726,6 +3734,7 @@ class ModkitPlugin {
         {
           typeName: method.typeName,
           methodName: method.name,
+          tableIndex: method.tableIndex,
           params,
           sharedBodyFallback: options.sharedBodyFallback !== false,
         },
@@ -3799,6 +3808,7 @@ class ModkitPlugin {
         const wasmType = this._runtime.getMethodWasmType(
           method.typeName,
           method.name,
+          method.tableIndex,
         );
         return { method, wasmType };
       });
@@ -3837,6 +3847,7 @@ class ModkitPlugin {
         {
           typeName: method.typeName,
           methodName: method.name,
+          tableIndex: method.tableIndex,
           params: wasmType.params,
           returnType: wasmType.returnType,
           sharedBodyFallback: options.sharedBodyFallback !== false,
@@ -3914,6 +3925,7 @@ class ModkitPlugin {
     const patch: BytecodePatch = {
       typeName: parsed.typeName,
       methodName: parsed.methodName,
+      tableIndex: parsed.tableIndex,
       returnType: parsed.returnType,
       bytecode: Array.from(bytecode),
       applied: false,
@@ -3929,6 +3941,7 @@ class ModkitPlugin {
     const patch: BytecodePatch = {
       typeName: parsed.typeName,
       methodName: parsed.methodName,
+      tableIndex: parsed.tableIndex,
       returnType: parsed.returnType,
       applied: false,
       enabled: true,
@@ -3966,13 +3979,17 @@ class ModkitPlugin {
     const hook = {
       typeName: target.typeName,
       methodName: target.methodName,
+      tableIndex: target.tableIndex,
+      invokerTableIndex: target.invokerTableIndex,
       params: target.params,
       returnType: target.returnType,
       sharedBodyFallback:
         target.sharedBodyFallback === true || target.allowSharedBody === true,
       runtimeTableFallbackOnly: target.runtimeTableFallback === true,
       tryInvokerFallback: target.invokerFallback === true,
-      skipDirectFallback: target.directFallback === false,
+      skipDirectFallback: target.tableIndex
+        ? target.directFallback !== true
+        : target.directFallback === false,
       applied: false,
       enabled: true,
       kind,
@@ -4116,8 +4133,16 @@ class ModkitPlugin {
     return this._runtime.findMethods(pattern);
   }
 
-  public getMethodWasmType(targetClass: string, targetMethod: string) {
-    return this._runtime.getMethodWasmType(targetClass, targetMethod);
+  public getMethodWasmType(
+    targetClass: string,
+    targetMethod: string,
+    tableIndex?: number,
+  ) {
+    return this._runtime.getMethodWasmType(
+      targetClass,
+      targetMethod,
+      tableIndex,
+    );
   }
 
   public findTypes(pattern: string) {

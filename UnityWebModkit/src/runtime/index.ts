@@ -966,6 +966,31 @@ export class Runtime {
               ++j;
               continue;
             }
+            const runtimeWasmType = this.getWasmFunctionTypeByGlobalIndex(
+              useHook.index + 1,
+            );
+            if (runtimeWasmType?.params?.every((param: string) => param === "i32")) {
+              const previousParams = useHook.params;
+              const previousReturnType = useHook.returnType;
+              useHook.params = runtimeWasmType.params;
+              useHook.returnType = runtimeWasmType.returnType;
+              if (
+                JSON.stringify(previousParams) !==
+                  JSON.stringify(useHook.params) ||
+                previousReturnType !== useHook.returnType
+              ) {
+                this.diag("hook signature normalized", {
+                  typeName: useHook.typeName,
+                  methodName: useHook.methodName,
+                  tableIndex: useHook.tableIndex,
+                  internalIndex: useHook.index,
+                  previousParams,
+                  previousReturnType,
+                  params: useHook.params,
+                  returnType: useHook.returnType,
+                });
+              }
+            }
             const injectName =
               useHook.typeName + "xx" + useHook.methodName + makeId(8);
             const originalExportName = "__uwm_original_" + injectName;
@@ -3942,9 +3967,9 @@ class ModkitPlugin {
       returnType: target.returnType,
       sharedBodyFallback:
         target.sharedBodyFallback === true || target.allowSharedBody === true,
-      runtimeTableFallbackOnly: target.runtimeTableFallback !== false,
+      runtimeTableFallbackOnly: target.runtimeTableFallback === true,
       tryInvokerFallback: target.invokerFallback === true,
-      skipDirectFallback: target.directFallback !== true,
+      skipDirectFallback: target.directFallback === false,
       applied: false,
       enabled: true,
       kind,

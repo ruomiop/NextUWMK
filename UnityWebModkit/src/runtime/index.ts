@@ -966,31 +966,6 @@ export class Runtime {
               ++j;
               continue;
             }
-            const runtimeWasmType = this.getWasmFunctionTypeByGlobalIndex(
-              useHook.index + 1,
-            );
-            if (runtimeWasmType?.params?.every((param: string) => param === "i32")) {
-              const previousParams = useHook.params;
-              const previousReturnType = useHook.returnType;
-              useHook.params = runtimeWasmType.params;
-              useHook.returnType = runtimeWasmType.returnType;
-              if (
-                JSON.stringify(previousParams) !==
-                  JSON.stringify(useHook.params) ||
-                previousReturnType !== useHook.returnType
-              ) {
-                this.diag("hook signature normalized", {
-                  typeName: useHook.typeName,
-                  methodName: useHook.methodName,
-                  tableIndex: useHook.tableIndex,
-                  internalIndex: useHook.index,
-                  previousParams,
-                  previousReturnType,
-                  params: useHook.params,
-                  returnType: useHook.returnType,
-                });
-              }
-            }
             const injectName =
               useHook.typeName + "xx" + useHook.methodName + makeId(8);
             const originalExportName = "__uwm_original_" + injectName;
@@ -1073,7 +1048,6 @@ export class Runtime {
                 wail,
                 useHook,
                 importObject,
-                injectType,
               )
             ) {
               ++j;
@@ -1621,7 +1595,6 @@ export class Runtime {
     wail: WailParser,
     hook: Hook,
     importObject: any,
-    injectType: number,
   ) {
     if (hook.kind !== 0 || hook.returnType) return false;
     if (!hook.params.every((param) => param === "i32")) return false;
@@ -1693,7 +1666,6 @@ export class Runtime {
         tableIndex: hook.tableIndex,
         internalIndex: hook.index,
         targets: joinedTargets,
-        injectType,
         params: hook.params,
       });
       return true;
@@ -1704,7 +1676,7 @@ export class Runtime {
     const injectName =
       hook.typeName + "xx" + hook.methodName + "Body" + makeId(8);
     const patchedTargets: number[] = [];
-    (importObject[importModuleName] as any)[injectName] = (
+    const bodyDispatch = (
       ...args: number[]
     ) => {
       const dispatchHooks = [
@@ -1713,7 +1685,7 @@ export class Runtime {
             (target) => this.bodyHookPatchedTargets.get(target) || [],
           ),
         ),
-      ];
+      ] as Hook[];
       const activeHooks = dispatchHooks.length > 0 ? dispatchHooks : [hook];
       for (const target of patchedTargets) {
         if (this.bodyHookDispatchLogged.has(target)) continue;
@@ -1735,14 +1707,16 @@ export class Runtime {
         activeHook.callback(...wrappedArgs);
       }
     };
-    const bodyPrefixFuncIndex = wail.addImportEntry({
-      moduleStr: importModuleName,
-      fieldStr: injectName,
-      kind: "func",
-      type: injectType,
-    });
 
     for (const target of newTargets) {
+      const targetInjectName = injectName + "_" + target.globalIndex;
+      (importObject[importModuleName] as any)[targetInjectName] = bodyDispatch;
+      const bodyPrefixFuncIndex = wail.addImportEntry({
+        moduleStr: importModuleName,
+        fieldStr: targetInjectName,
+        kind: "func",
+        type: target.funcType,
+      });
       const cloneFuncIndex = wail.addFunctionEntry({
         type: target.funcType,
       });
@@ -1753,10 +1727,10 @@ export class Runtime {
 
       const targetFuncIndex = wail.getFunctionIndex(target.globalIndex);
       const code: any[] = [
-        ...this.makeLocalGetInstructions(hook.params.length),
+        ...this.makeLocalGetInstructions(target.params.length),
         OP_CALL,
         bodyPrefixFuncIndex.varUint32(),
-        ...this.makeLocalGetInstructions(hook.params.length),
+        ...this.makeLocalGetInstructions(target.params.length),
         OP_CALL,
         cloneFuncIndex.varUint32(),
         0x0b,
@@ -1784,8 +1758,18 @@ export class Runtime {
       tableIndex: hook.tableIndex,
       internalIndex: hook.index,
       targets: allPatchedTargets,
-      injectType,
       params: hook.params,
+      targetTypes: allPatchedTargets.map((target) => {
+        const match = targets.find((item) => item.globalIndex === target);
+        return match
+          ? {
+              target,
+              params: match.params,
+              returnType: match.returnType,
+              signatureMode: match.signatureMode,
+            }
+          : { target };
+      }),
     });
     return true;
   }
@@ -1812,8 +1796,8 @@ export class Runtime {
     ]
       .filter((index): index is number => this.isValidInternalIndex(index))
       .filter((index, offset, indexes) => indexes.indexOf(index) === offset);
-    return candidates
-      .map((globalIndex) => {
+    const targets: BodyHookTarget[] = candidates
+      .map((globalIndex): BodyHookTarget | undefined => {
         const functionSectionIndex =
           globalIndex - this.wasmImportFunctionCount;
         if (functionSectionIndex < 0) return undefined;
@@ -1821,23 +1805,31 @@ export class Runtime {
         const functionInfo = this.internalWasmFunctions?.[functionSectionIndex];
         const type = this.internalWasmTypes?.[functionInfo?.funcType];
         if (!code || !functionInfo || !type) return undefined;
-        if (JSON.stringify(type.params) !== JSON.stringify(hook.params))
-          return undefined;
-        if ((type.returnType || undefined) !== (hook.returnType || undefined))
-          return undefined;
+        const params = Array.from(type.params || []).map((param) =>
+          String(param),
+        );
+        const returnType = type.returnType || undefined;
+        if (!params.every((param) => param === "i32")) return undefined;
         return {
           globalIndex,
           funcType: functionInfo.funcType,
           locals: code.locals || [],
           instructions: code.instructions || [],
+          params,
+          returnType,
+          signatureMode:
+            JSON.stringify(params) === JSON.stringify(hook.params) &&
+            returnType === (hook.returnType || undefined)
+              ? "exact"
+              : "physical",
         };
       })
-      .filter((target): target is {
-        globalIndex: number;
-        funcType: number;
-        locals: string[];
-        instructions: Uint8Array[];
-      } => Boolean(target));
+      .filter((target): target is BodyHookTarget => Boolean(target));
+    const exactTargets = targets.filter(
+      (target) => target.signatureMode === "exact",
+    );
+    if (exactTargets.length > 0) return exactTargets;
+    return targets.filter((target) => !target.returnType);
   }
 
   private getBodyHookAliases(hook: Hook) {
@@ -3421,6 +3413,16 @@ type Hook = {
   enabled: boolean;
   kind: number;
   callback: PrefixCallback | PostfixCallback;
+};
+
+type BodyHookTarget = {
+  globalIndex: number;
+  funcType: number;
+  locals: string[];
+  instructions: Uint8Array[];
+  params: string[];
+  returnType?: string;
+  signatureMode: "exact" | "physical";
 };
 
 type ImportHook = {

@@ -1157,12 +1157,13 @@ export class Runtime {
                 methodName: hook.methodName,
                 tableIndex: hook.tableIndex,
                 methodTableApplied,
+                bodyPatched: hook.bodyPatched === true,
                 tryInvokerFallback: hook.tryInvokerFallback === true,
                 invokerApplied,
                 invokerTableIndex: hook.invokerTableIndex,
                 invokerFallbackApplied: hook.invokerFallbackApplied === true,
               });
-              if (!methodTableApplied && !invokerApplied) {
+              if (!methodTableApplied && !invokerApplied && !hook.bodyPatched) {
                 this.logger.warn(
                   "Hook %s.%s was not applied",
                   hook.typeName,
@@ -1617,7 +1618,7 @@ export class Runtime {
     hook: Hook,
     importObject: any,
   ) {
-    if (hook.kind !== 0 || hook.returnType) return false;
+    if (hook.kind !== 0) return false;
     if (!hook.params.every((param) => param === "i32")) return false;
 
     const targets = this.getBodyHookTargets(hook);
@@ -1732,11 +1733,17 @@ export class Runtime {
     for (const target of newTargets) {
       const targetInjectName = injectName + "_" + target.globalIndex;
       (importObject[importModuleName] as any)[targetInjectName] = bodyDispatch;
+      const bodyPrefixFuncType = target.returnType
+        ? wail.addTypeEntry({
+            form: "func",
+            params: target.params,
+          })
+        : target.funcType;
       const bodyPrefixFuncIndex = wail.addImportEntry({
         moduleStr: importModuleName,
         fieldStr: targetInjectName,
         kind: "func",
-        type: target.funcType,
+        type: bodyPrefixFuncType,
       });
       const cloneFuncIndex = wail.addFunctionEntry({
         type: target.funcType,

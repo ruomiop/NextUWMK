@@ -1869,7 +1869,7 @@ export class Runtime {
       })
       .filter((target): target is BodyHookTarget => Boolean(target));
     const exactTargets = targets.filter(
-      (target) => target.signatureMode === "exact",
+      (target) => target.signatureMode === "exact" && !target.returnType,
     );
     if (exactTargets.length > 0) return exactTargets;
     return targets.filter((target) => !target.returnType);

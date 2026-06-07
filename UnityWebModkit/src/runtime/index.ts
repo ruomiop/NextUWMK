@@ -1043,7 +1043,6 @@ export class Runtime {
                 importObject,
               )
             ) {
-              runtimeTableFallbackHooks.push(useHook);
               ++j;
               continue;
             }
@@ -1169,7 +1168,11 @@ export class Runtime {
             const fallbackHooks = [
               ...new Set([
                 ...runtimeTableFallbackHooks,
-                ...unappliedHooks,
+                ...unappliedHooks.filter(
+                  (hook) =>
+                    hook.runtimeTableFallbackOnly === true ||
+                    hook.tryInvokerFallback === true,
+                ),
               ]),
             ];
             fallbackHooks.forEach((hook) => {
@@ -4111,7 +4114,8 @@ class ModkitPlugin {
       maxSharedBodyAliases: target.maxSharedBodyAliases,
       runtimeTableFallbackOnly: target.runtimeTableFallback === true,
       tryInvokerFallback: target.invokerFallback === true,
-      skipDirectFallback: target.directFallback !== true,
+      skipDirectFallback:
+        target.directFallback === false || target.runtimeTableFallback === true,
       applied: false,
       enabled: true,
       kind,

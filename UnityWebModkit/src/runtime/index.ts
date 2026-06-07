@@ -1063,6 +1063,28 @@ export class Runtime {
               ++j;
               continue;
             }
+            const directRuntimeType = this.getWasmFunctionTypeByGlobalIndex(
+              useHook.index,
+            );
+            const directSignatureMatches = directRuntimeType &&
+              JSON.stringify(directRuntimeType.params || []) ===
+                JSON.stringify(useHook.params) &&
+              (directRuntimeType.returnType || undefined) ===
+                (useHook.returnType || undefined);
+            if (!directSignatureMatches) {
+              runtimeTableFallbackHooks.push(useHook);
+              this.diag("hook.direct skipped by runtime signature mismatch", {
+                typeName: useHook.typeName,
+                methodName: useHook.methodName,
+                tableIndex: useHook.tableIndex,
+                internalIndex: useHook.index,
+                hookParams: useHook.params,
+                hookReturnType: useHook.returnType,
+                runtimeType: directRuntimeType,
+              });
+              ++j;
+              continue;
+            }
             const replacementFuncIndex = wail.addImportEntry({
               moduleStr: "env",
               fieldStr: injectName,

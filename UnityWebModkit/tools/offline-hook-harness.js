@@ -228,15 +228,18 @@ function readUlebFromInstruction(instruction) {
     diagnostics: true,
   });
   if (args.get("probe-updates") === "true") {
-    plugin.probeUpdateHooks(
-      {
-        typePattern: /.*/,
-        maxHooks: Number(args.get("max-hooks") || 250),
-        logEvery: 120,
-        sharedBodyFallback: args.get("shared-body") !== "false",
-      },
-      () => undefined,
-    );
+    const probeOptions = {
+      typePattern: /.*/,
+      maxHooks: Number(args.get("max-hooks") || 250),
+      logEvery: 120,
+      sharedBodyFallback: args.get("shared-body") !== "false",
+    };
+    if (args.has("max-shared-body-aliases")) {
+      probeOptions.maxSharedBodyAliases = Number(
+        args.get("max-shared-body-aliases"),
+      );
+    }
+    plugin.probeUpdateHooks(probeOptions, () => undefined);
   } else if (args.get("probe-type") === "true") {
     const probeOptions = {
       typeName,
@@ -245,6 +248,11 @@ function readUlebFromInstruction(instruction) {
       logEvery: 120,
       sharedBodyFallback: args.get("shared-body") !== "false",
     };
+    if (args.has("max-shared-body-aliases")) {
+      probeOptions.maxSharedBodyAliases = Number(
+        args.get("max-shared-body-aliases"),
+      );
+    }
     if (args.has("include-returns")) {
       probeOptions.includeReturns = args.get("include-returns") === "true";
     }
@@ -263,6 +271,11 @@ function readUlebFromInstruction(instruction) {
     }
     if (args.has("shared-body")) {
       baseHookInfo.sharedBodyFallback = args.get("shared-body") !== "false";
+    }
+    if (args.has("max-shared-body-aliases")) {
+      baseHookInfo.maxSharedBodyAliases = Number(
+        args.get("max-shared-body-aliases"),
+      );
     }
     plugin.hookPrefix(baseHookInfo, () => true);
     if (args.get("duplicate-body") === "true") {

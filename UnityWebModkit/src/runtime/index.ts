@@ -1063,8 +1063,9 @@ export class Runtime {
               ++j;
               continue;
             }
+            const directGlobalIndex = this.toGlobalFunctionIndex(useHook.index);
             const directRuntimeType = this.getWasmFunctionTypeByGlobalIndex(
-              useHook.index,
+              directGlobalIndex,
             );
             const directSignatureMatches = directRuntimeType &&
               JSON.stringify(directRuntimeType.params || []) ===
@@ -1078,6 +1079,7 @@ export class Runtime {
                 methodName: useHook.methodName,
                 tableIndex: useHook.tableIndex,
                 internalIndex: useHook.index,
+                globalIndex: directGlobalIndex,
                 hookParams: useHook.params,
                 hookReturnType: useHook.returnType,
                 runtimeType: directRuntimeType,
@@ -1094,7 +1096,7 @@ export class Runtime {
             useHook.callCount = useHook.callCount || 0;
             useHook.lastArgs = useHook.lastArgs || [];
             replacementFuncIndexes.push(replacementFuncIndex);
-            const oldFuncIndex = wail.getFunctionIndex(useHook.index);
+            const oldFuncIndex = wail.getFunctionIndex(directGlobalIndex);
             oldFuncIndexes.push(oldFuncIndex);
             wail.addExportEntry(oldFuncIndex, {
               fieldStr: originalExportName,
@@ -1110,6 +1112,7 @@ export class Runtime {
               methodName: useHook.methodName,
               tableIndex: useHook.tableIndex,
               internalIndex: useHook.index,
+              globalIndex: directGlobalIndex,
               oldFuncIndex: oldFuncIndex.i32(),
               replacementFuncIndex: replacementFuncIndex.i32(),
               injectType,
@@ -1475,9 +1478,13 @@ export class Runtime {
 
     const slotInternalIndex = this.getInternalIndexForTableSlot(slot);
     const runtimeType = this.isValidInternalIndex(slotInternalIndex)
-      ? this.getWasmFunctionTypeByGlobalIndex(slotInternalIndex)
+      ? this.getWasmFunctionTypeByGlobalIndex(
+          this.toGlobalFunctionIndex(slotInternalIndex),
+        )
       : this.isValidInternalIndex(hook.index)
-        ? this.getWasmFunctionTypeByGlobalIndex(hook.index)
+        ? this.getWasmFunctionTypeByGlobalIndex(
+            this.toGlobalFunctionIndex(hook.index),
+          )
         : undefined;
     const effectiveParams = Array.isArray(runtimeType?.params)
       ? runtimeType.params
@@ -1553,6 +1560,9 @@ export class Runtime {
       params: effectiveParams,
       results: hookResults,
       slotInternalIndex,
+      slotGlobalIndex: this.isValidInternalIndex(slotInternalIndex)
+        ? this.toGlobalFunctionIndex(slotInternalIndex)
+        : undefined,
       runtimeType,
       matchedOriginalExport: Boolean(expectedOriginalFunc) &&
         originalFunc === expectedOriginalFunc,
@@ -3149,8 +3159,9 @@ export class Runtime {
     if (!this.isValidTableIndex(tableIndex)) return undefined;
     const internalIndex = this.getInternalIndex(tableIndex);
     if (!this.isValidInternalIndex(internalIndex)) return undefined;
-    const bodyIndex = internalIndex + 1;
-    const tableType = this.getWasmFunctionTypeByGlobalIndex(internalIndex);
+    const globalIndex = this.toGlobalFunctionIndex(internalIndex);
+    const bodyIndex = globalIndex + 1;
+    const tableType = this.getWasmFunctionTypeByGlobalIndex(globalIndex);
     const bodyType = this.getWasmFunctionTypeByGlobalIndex(bodyIndex);
     const type = tableType || bodyType;
     if (!type) return undefined;
@@ -3158,7 +3169,8 @@ export class Runtime {
       params: Array.from(type.params || []),
       returnType: type.returnType,
       tableIndex,
-      internalIndex: tableType ? internalIndex : bodyIndex,
+      internalIndex,
+      globalIndex: tableType ? globalIndex : bodyIndex,
     };
   }
 

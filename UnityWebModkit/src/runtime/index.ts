@@ -1655,6 +1655,7 @@ export class Runtime {
     importObject: any,
   ) {
     if (hook.kind !== 0) return false;
+    if (!hook.bodyFallback) return false;
     if (!hook.params.every((param) => param === "i32")) return false;
 
     const targets = this.getBodyHookTargets(hook);
@@ -3499,6 +3500,7 @@ type Hook = {
   originalExportName?: string;
   bodyPatched?: boolean;
   bodyPatchTargets?: number[];
+  bodyFallback?: boolean;
   skipDirectFallback?: boolean;
   sharedBodyFallback?: boolean;
   maxSharedBodyAliases?: number;
@@ -3569,6 +3571,8 @@ export type HookInfo = {
   runtimeTableFallback?: boolean;
   invokerFallback?: boolean;
   sharedBodyFallback?: boolean;
+  bodyFallback?: boolean;
+  bodyPatch?: boolean;
   maxSharedBodyAliases?: number;
   allowSharedBody?: boolean;
 };
@@ -4093,6 +4097,11 @@ class ModkitPlugin {
       invokerTableIndex: target.invokerTableIndex,
       params: target.params,
       returnType: target.returnType,
+      bodyFallback:
+        target.bodyFallback === true ||
+        target.bodyPatch === true ||
+        target.sharedBodyFallback === true ||
+        target.allowSharedBody === true,
       sharedBodyFallback:
         target.sharedBodyFallback === true || target.allowSharedBody === true,
       maxSharedBodyAliases: target.maxSharedBodyAliases,

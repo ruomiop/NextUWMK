@@ -1053,12 +1053,14 @@ export class Runtime {
               continue;
             }
             if (useHook.skipDirectFallback) {
-              runtimeTableFallbackHooks.push(useHook);
+              useHook.enabled = false;
+              useHook.applied = true;
               this.diag("hook.direct skipped by hook option", {
                 typeName: useHook.typeName,
                 methodName: useHook.methodName,
                 tableIndex: useHook.tableIndex,
                 internalIndex: useHook.index,
+                runtimeTableFallback: false,
               });
               ++j;
               continue;
@@ -1073,7 +1075,8 @@ export class Runtime {
               (directRuntimeType.returnType || undefined) ===
                 (useHook.returnType || undefined);
             if (!directSignatureMatches) {
-              runtimeTableFallbackHooks.push(useHook);
+              useHook.enabled = false;
+              useHook.applied = true;
               this.diag("hook.direct skipped by runtime signature mismatch", {
                 typeName: useHook.typeName,
                 methodName: useHook.methodName,
@@ -1083,6 +1086,7 @@ export class Runtime {
                 hookParams: useHook.params,
                 hookReturnType: useHook.returnType,
                 runtimeType: directRuntimeType,
+                runtimeTableFallback: false,
               });
               ++j;
               continue;
@@ -4107,9 +4111,7 @@ class ModkitPlugin {
       maxSharedBodyAliases: target.maxSharedBodyAliases,
       runtimeTableFallbackOnly: target.runtimeTableFallback === true,
       tryInvokerFallback: target.invokerFallback === true,
-      skipDirectFallback: target.tableIndex
-        ? target.directFallback !== true
-        : target.directFallback === false,
+      skipDirectFallback: target.directFallback !== true,
       applied: false,
       enabled: true,
       kind,

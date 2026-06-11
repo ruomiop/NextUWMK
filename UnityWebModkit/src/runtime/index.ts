@@ -753,7 +753,7 @@ export class Runtime {
           hasContext: Boolean(this.il2CppContext),
           typeAddresses: this.il2CppContext?.typeAddresses?.length || 0,
         });
-        if (!this.il2CppContext || !this.hasWasmStructure()) {
+        if (!this.il2CppContext) {
           this.searchWasmBinary(bufferSource);
         }
         if (!this.il2CppContext) {

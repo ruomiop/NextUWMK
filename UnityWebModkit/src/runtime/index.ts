@@ -1064,7 +1064,7 @@ export class Runtime {
               ++j;
               continue;
             }
-            const directGlobalIndex = this.toGlobalFunctionIndex(useHook.index);
+            const directGlobalIndex = useHook.index;
             const directRuntimeType = this.getWasmFunctionTypeByGlobalIndex(
               directGlobalIndex,
             );
@@ -1485,13 +1485,9 @@ export class Runtime {
 
     const slotInternalIndex = this.getInternalIndexForTableSlot(slot);
     const runtimeType = this.isValidInternalIndex(slotInternalIndex)
-      ? this.getWasmFunctionTypeByGlobalIndex(
-          this.toGlobalFunctionIndex(slotInternalIndex),
-        )
+      ? this.getWasmFunctionTypeByGlobalIndex(slotInternalIndex)
       : this.isValidInternalIndex(hook.index)
-        ? this.getWasmFunctionTypeByGlobalIndex(
-            this.toGlobalFunctionIndex(hook.index),
-          )
+        ? this.getWasmFunctionTypeByGlobalIndex(hook.index)
         : undefined;
     const effectiveParams = Array.isArray(runtimeType?.params)
       ? runtimeType.params
@@ -1567,9 +1563,7 @@ export class Runtime {
       params: effectiveParams,
       results: hookResults,
       slotInternalIndex,
-      slotGlobalIndex: this.isValidInternalIndex(slotInternalIndex)
-        ? this.toGlobalFunctionIndex(slotInternalIndex)
-        : undefined,
+      slotGlobalIndex: slotInternalIndex,
       runtimeType,
       matchedOriginalExport: Boolean(expectedOriginalFunc) &&
         originalFunc === expectedOriginalFunc,
@@ -1608,7 +1602,7 @@ export class Runtime {
     }
     const invokerInternalIndex = this.getInternalIndex(invokerTableIndex);
     const invokerType = this.getWasmFunctionTypeByGlobalIndex(
-      invokerInternalIndex + 1,
+      invokerInternalIndex,
     );
     if (
       !invokerType ||
@@ -3167,7 +3161,7 @@ export class Runtime {
     if (!this.isValidTableIndex(tableIndex)) return undefined;
     const internalIndex = this.getInternalIndex(tableIndex);
     if (!this.isValidInternalIndex(internalIndex)) return undefined;
-    const globalIndex = this.toGlobalFunctionIndex(internalIndex);
+    const globalIndex = internalIndex;
     const bodyIndex = globalIndex + 1;
     const tableType = this.getWasmFunctionTypeByGlobalIndex(globalIndex);
     const bodyType = this.getWasmFunctionTypeByGlobalIndex(bodyIndex);
@@ -3445,7 +3439,7 @@ export class Runtime {
     table?: WebAssembly.Table,
   ): number | undefined {
     if (!this.isValidTableIndex(tableIndex)) return undefined;
-    const slot = tableIndex - 1;
+    const slot = tableIndex;
     if (table && (slot < 0 || slot >= table.length)) return undefined;
     return slot;
   }
@@ -3456,7 +3450,7 @@ export class Runtime {
     return (
       typeof tableIndex === "number" &&
       Number.isFinite(tableIndex) &&
-      tableIndex > 0
+      tableIndex >= 0
     );
   }
 

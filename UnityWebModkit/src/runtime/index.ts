@@ -814,13 +814,24 @@ export class Runtime {
         const hasPendingMethodProbes = this.plugins.some(
           (plugin) => plugin.hasPendingMethodProbes,
         );
-        const hasHooks =
-          hasPendingMethodProbes ||
-          this.plugins.some((plugin) => plugin.hooks.length > 0);
+        const hasMethodHooks = this.plugins.some(
+          (plugin) => plugin.hooks.length > 0,
+        );
+        const hasHooks = hasPendingMethodProbes || hasMethodHooks;
+        const requiresWasmHookPatchPath = this.plugins.some((plugin) =>
+          plugin.hooks.some(
+            (hook) => hook.forceDirectFallback || hook.bodyFallback,
+          )
+        );
         const hasBytecodePatches = this.plugins.some(
           (plugin) => plugin.bytecodePatches.length > 0,
         );
-        if (!cachedIl2CppFunctionCache || hasHooks || hasBytecodePatches) {
+        if (
+          !cachedIl2CppFunctionCache ||
+          hasPendingMethodProbes ||
+          requiresWasmHookPatchPath ||
+          hasBytecodePatches
+        ) {
           this.resetWasmStructureCache();
           const wailPreparser = new WailParser(bufferUint8Array);
           wailPreparser._optionalSectionFlags |= 1 << SECTION_CODE;
@@ -855,7 +866,8 @@ export class Runtime {
         if (
           cachedIl2CppFunctionCache &&
           Object.keys(this.candidateIl2CppFunctions).length === 0 &&
-          !hasHooks &&
+          !hasPendingMethodProbes &&
+          !requiresWasmHookPatchPath &&
           !hasBytecodePatches
         ) {
           const patchedBuffer = this.patchWasmExports(
@@ -893,6 +905,7 @@ export class Runtime {
                     hook.applied = true;
                     continue;
                   }
+                  hook.legacyRuntimeTableHook = true;
                   if (!this.applyIndirectHook(source, hook, tableName)) {
                     this.logger.warn(
                       "Hook %s.%s was not applied",
@@ -1963,8 +1976,8 @@ export class Runtime {
   ) {
     if (!this.isValidTableIndex(hook.tableIndex)) return undefined;
     const candidates = [
-      hook.tableIndex - 1,
       hook.tableIndex,
+      hook.tableIndex - 1,
       hook.tableSlot,
     ].filter((slot): slot is number => typeof slot === "number").filter(
       (slot, index, slots) =>
@@ -1997,6 +2010,20 @@ export class Runtime {
         matchesOriginalExport: Boolean(expectedOriginalFunc) &&
           value === expectedOriginalFunc,
       });
+      if (
+        hook.legacyRuntimeTableHook &&
+        !expectedOriginalFunc &&
+        slot === hook.tableIndex &&
+        typeof value === "function"
+      ) {
+        this.diag("hook.indirect matched legacy table index candidate", {
+          typeName: hook.typeName,
+          methodName: hook.methodName,
+          tableIndex: hook.tableIndex,
+          tableSlot: slot,
+        });
+        return slot;
+      }
       const slotInternalIndex = this.getInternalIndexForTableSlot(slot);
       if (
         hook.index !== undefined &&
@@ -3502,11 +3529,13 @@ type Hook = {
   bodyPatched?: boolean;
   bodyPatchTargets?: number[];
   bodyFallback?: boolean;
+  forceDirectFallback?: boolean;
   skipDirectFallback?: boolean;
   sharedBodyFallback?: boolean;
   maxSharedBodyAliases?: number;
   sharedBodyAliasCount?: number;
   runtimeTableFallbackOnly?: boolean;
+  legacyRuntimeTableHook?: boolean;
   tryInvokerFallback?: boolean;
   invokerFallbackApplied?: boolean;
   invokerTableIndex?: number;
@@ -3877,6 +3906,7 @@ class ModkitPlugin {
         },
       );
       hook.tryInvokerFallback = options.invokerFallback === true;
+      hook.forceDirectFallback = options.directFallback === true;
       hook.skipDirectFallback = options.directFallback !== true;
       hooks.push(hook);
     }
@@ -3994,6 +4024,7 @@ class ModkitPlugin {
         },
       );
       hook.tryInvokerFallback = options.invokerFallback === true;
+      hook.forceDirectFallback = options.directFallback === true;
       if (wasmType.returnType && options.directFallback !== true) {
         hook.runtimeTableFallbackOnly = true;
       }
@@ -4108,6 +4139,7 @@ class ModkitPlugin {
       maxSharedBodyAliases: target.maxSharedBodyAliases,
       runtimeTableFallbackOnly: target.runtimeTableFallback === true,
       tryInvokerFallback: target.invokerFallback === true,
+      forceDirectFallback: target.directFallback === true,
       skipDirectFallback:
         target.directFallback === false || target.runtimeTableFallback === true,
       applied: false,

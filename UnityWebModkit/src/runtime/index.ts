@@ -35,6 +35,7 @@ import { dataTypeSizes } from "../extras";
 const STORAGE_DB_VERSION = 5;
 const METADATA_CACHE_VERSION = 2;
 const IL2CPP_CONTEXT_CACHE_VERSION = 6;
+const LEGACY_IL2CPP_CONTEXT_CACHE_VERSION = 5;
 const IL2CPP_FUNCTION_CACHE_NAME = "il2cpp-functions";
 const WASM_SECTION_EXPORT = 7;
 const WASM_SECTION_TAG = 13;
@@ -518,7 +519,10 @@ export class Runtime {
             const context = il2CppRequest.result;
             if (
               !context ||
-              context.cacheVersion !== IL2CPP_CONTEXT_CACHE_VERSION ||
+              ![
+                IL2CPP_CONTEXT_CACHE_VERSION,
+                LEGACY_IL2CPP_CONTEXT_CACHE_VERSION,
+              ].includes(context.cacheVersion) ||
               !context.fieldData ||
               !context.scriptData ||
               !this.hasUsableFieldData(context.fieldData) ||
@@ -530,6 +534,9 @@ export class Runtime {
               return;
             }
             this.il2CppContext = context;
+            if (context.cacheVersion !== IL2CPP_CONTEXT_CACHE_VERSION) {
+              this.saveIl2CppContext();
+            }
             resolve();
           };
         };
